@@ -1,201 +1,137 @@
 # Colony Autopilot
 
-*Made by **Backwards** - https://www.curseforge.com/members/backwards/projects. Licensed under GPL-3.0.*
+**Place a Town Hall. The colony runs the rest.**
 
-Download the mod from its [CurseForge page](https://www.curseforge.com/minecraft/mc-mods/colonyautopilot). This repository is the corresponding source of each CurseForge release, one tag per version.
+Colony Autopilot is an addon for [MineColonies](https://www.curseforge.com/minecraft/mc-mods/minecolonies) on Minecraft 1.21.1 (NeoForge). It plays the town planner for you: it picks where every building goes, shapes the land, lays lit roads, orders builds and upgrades, hires and equips the citizens, runs the university, repairs raid damage and mans the defences. Your citizens still do the work, by MineColonies' own rules. You keep the parts of MineColonies that are fun: the quests, the raids, the treasury, and watching a village grow out of nothing.
 
-A companion addon for [MineColonies](https://github.com/ldtteam/minecolonies) that turns a colony
-into a **living village**: place the Town Hall, confirm founding, and walk away. The colony places
-its own buildings, builds and upgrades them, gathers its own materials at a configurable pace,
-repairs itself after raids, and tells you about its milestones in chat.
+Made by **Backwards** ([CurseForge](https://www.curseforge.com/members/backwards/projects)). Licensed under GPL-3.0.
 
-**Needs:** Minecraft 1.21.1, NeoForge 21.1 (any 21.1.x; 21.1.235 is the dev-tested build) and [MineColonies](https://www.curseforge.com/minecraft/mc-mods/minecolonies) 1.1.1319 or newer with its libraries. **Install:** drop the jar into `mods/` on the server and on every client, the same version everywhere. **Bugs and questions:** https://github.com/Back-wards/ColonyAutopilot/issues (not MineColonies' tracker). The full version table is under Requirements.
+- **Download the mod:** [Colony Autopilot on CurseForge](https://www.curseforge.com/minecraft/mc-mods/colonyautopilot)
+- **Want the full apocalypse?** The [AutoColony Apocalypse](https://www.curseforge.com/minecraft/modpacks/autocolony-apocalypse) modpack bundles this mod with Fungal Infection: Spore, guns, turrets and a 50-day countdown to the end of the world.
+- **Bugs and questions:** [open an issue here](https://github.com/Back-wards/ColonyAutopilot/issues). Please do not report Colony Autopilot problems to the MineColonies team.
 
-The player keeps the drama: quests, raid defense and the endgame. Research and visitor recruiting
-are automated by default (`research.autoResearch`, `research.forks`/`research.capstones` and
-`providence.recruitVisitors` hand them back), and the warehouse janitor trims the surplus.
+## What you need
 
-## How it works
+- Minecraft 1.21.1 with NeoForge 21.1 (any 21.1.x build; 21.1.235 and 21.1.251 are the tested ones).
+- MineColonies 1.1.1319 or newer, with the libraries it already asks for (Structurize, BlockUI, Domum Ornamentum). Tested with 1.1.1368.
+- Put `colonyautopilot-<version>.jar` in the `mods` folder. On a server it goes on the server **and** on every player's client, the same version everywhere.
 
-| Subsystem | What it does |
+It works on a colony you already have. If you ever want to remove the mod, run `/colonyautopilot off` first so the colony hands its buildings back to plain MineColonies.
+
+## Your first hour
+
+1. **Join the world.** On your first join you get a starter kit: MineColonies' build tool, a **Zone Marker**, and the **Field Guide**, the in-game book that explains everything on this page in detail. The first player to join a world that has no colony yet also gets a **Town Hall** block, once per world.
+2. **Place the Town Hall and confirm the founding** in the window that opens. From this moment the colony is on autopilot.
+3. **Watch the village start.** Within a game-minute the first Builder's Hut is placed on flat ground near the hall, its ground levelled and a lamp-lit road laid to its door. The builder gets the materials delivered and starts. A new building follows about every ten game-minutes: a Tavern for recruits, Residences, a Guard Tower, a Farm, a Warehouse, a Courier's Hut, and on through a 69-step plan that ends in a fully grown town.
+4. **Read the chat.** The colony tells you when a building finishes, when the town grows, when the Town Hall goes up a level, and once a day it lists anything that needs a human. `/colonyautopilot status` shows what each colony is doing right now.
+5. **Keep the treasury full.** In Progression Mode (on by default) the colony pays for its supplies in **ColonyBucks**, a coin you earn by playing. More on that below. If you would rather have the colony supplied for free, switch Progression Mode off on the town hall's Autopilot settings page.
+
+## What the colony does for you
+
+- **Finds or makes the land.** Flat, dry plots first. When none fit, it levels the ground or carves the footprint, so no building is skipped. A ravine between buildings gets a causeway.
+- **Builds along a plan and upgrades in order.** The Town Hall goes up as soon as the population allows it, nothing climbs more than one level above the hall, and upgrades of standing buildings come before new ones.
+- **Roads and light.** A lamp-lit road from every door into the village, laid again when it breaks, with lamp posts spaced so they light the road without crowding it.
+- **Hires and equips everyone.** Empty workplaces are filled from the jobless, tavern visitors are recruited while beds are free, workers get tools and armour matched to the colony's stage, and worn gear is replaced.
+- **Feeds and heals.** The hungry are fed and the sick are cured from the colony's stores, or from the treasury when the stores run short.
+- **Keeps the warehouse stocked** with staples, destroys the junk that piles up, and teaches the crafters their recipes.
+- **Outfits each workplace:** fields for the farm and the plantation, animals for the ranchers, a bee nest, a pond for the fisher, a grove for the forester.
+- **Researches.** The university works through MineColonies' research tree on its own, unlocking the buildings the plan needs next.
+- **Repairs.** A building that lost eight or more blocks to a raid or an explosion is restored from its blueprint. No builder needed.
+- **Keeps the grounds.** Doors dug free, stray trees felled, deadly drops and lava made safe, berry bushes cleared.
+- **Defends.** Guard towers go up where buildings stand unguarded, up to twenty. The guards are kept at three fighters to one archer with a druid for every four, and more barracks are built as they need room. Two iron golems watch the Town Hall and one each Blacksmith, re-forged when they fall. An alert horn sounds for everyone online when the village is being killed.
+- **Unsticks itself.** A builder whose site stops rising is sent home to find a new way to it. A build that stalls twice goes to another builder. Workers who freeze are fixed and rehired.
+
+Every one of these has its own switch. See *Settings and switches* below.
+
+## Money: ColonyBucks
+
+In Progression Mode the colony is not supplied out of thin air. What it cannot make itself is **bought with ColonyBucks** from its treasury: deliveries, building materials, guard gear and gear upgrades, research, and cures when the stores are empty. Recruits, food deliveries and the outfitting of workplaces (fields, ponds, animals, golems) stay free.
+
+**Earning bucks**
+
+- A hostile mob drops a buck one time in thirty when you, a citizen, or something you own (a golem, a turret, a tamed wolf) kills it. A citizen's kill goes straight into the treasury.
+- Dungeon and other structure chests hold six to fifteen bucks; mineshaft chests two to five.
+- Every raider killed during a raid pays one buck.
+- The **exchange** buys valuables for bucks: two diamonds for one buck, a diamond block for five, sixteen gold ingots for one, one ancient debris for one, a netherite ingot for four. Open it with `/colonyautopilot exchange` or the **Trade** button on the town hall's Exchange tab. It only ever buys. Bucks buy nothing back: only the colony spends them.
+
+**Paying in**
+
+Sneak-right-click the Town Hall block with bucks in your hand. A hopper, a pipe, or the hall's own racks work too.
+
+**When the money runs out**
+
+Nothing happens on credit. Requests, research and cures simply wait, chat says `The colony treasury is empty — waiting for ColonyBucks: 12 requests`, and the moment you pay in, the queue drains. A site waiting for money is never counted as stuck. The colony saves up for research it cannot afford yet and buys it whole.
+
+**Seeing the books**
+
+The town hall's **Exchange** tab (or `/colonyautopilot treasury`) shows the balance, what is waiting, what the colony is saving for, the day's income and spending, the **Trade** button, and a **Re-lay roads** button that redoes every road in the village.
+
+## Keeping your own builds safe
+
+The colony builds around what you make, as long as it knows where that is.
+
+- **Zone Marker.** Right-click two corners with the marker from your kit (or `/colonyautopilot zone wand`) to fence off an area. Inside a zone the colony places nothing, levels nothing, paves nothing, lights nothing, fells nothing and scrubs nothing. Up to 24 zones per colony, each up to 48 blocks on a side. Mark your base before the town reaches it.
+- **Left alone on its own:** anything built high over the town, log walls, treehouses, and any block column that holds a chest or a sign.
+- **Huts you place yourself** are adopted: built, upgraded, staffed and given a road like any other.
+
+## Settings and switches
+
+Open the Town Hall, go to **Settings**, then **Autopilot settings** (or stand in the colony and run `/colonyautopilot menu`). Every feature of the mod has a row there for *this* colony: switches turn on and off, numbers take a value, and **Reset** puts the default back. Hover a row to read what it does.
+
+Rows marked **global** are server-wide: the prices, the earning rates, the world tweaks and anything else that affects every colony and every player. They cannot be changed from a colony's page, on purpose, so nobody changes the whole server's economy by accident while poking at their own town. Change them in `config/colonyautopilot-server.toml`, or as an operator with `/colonyautopilot set section.key value`. In single-player you are the server, so use the file or the command with cheats on.
+
+Commands a survival player actually uses:
+
+| Command | What it does |
 |---|---|
-| GrowthDirector | Follows an ordered, population-gated growth plan (JSON-configurable) and places the next hut on a paced cooldown; after the plan completes (`growth.endlessExpansion`) it adds homes, and a guard tower for every three, while beds are the cap and jobs outnumber people, then one extra guard tower per `growth.citizensPerExtraProduction` villagers, up to `growth.guardTowerCap` |
-| SiteSelector | Scans expanding rings around the town hall for a flat, dry, unclaimed, non-overlapping plot — measured with the rotation the building will actually be built in |
-| UpgradeDirector | Queues build/upgrade work orders (lowest level first, builders' huts on ties), capped at one in-flight order per hired builder; files the repairs owed by buildings it opened early (raid damage is DamageWatch's own re-paste) |
-| MaterialTrickle | Materializes missing construction materials inside builders' huts at a configurable items/minute |
-| ProvidenceSweep | Fulfills any request the colony itself cannot resolve after a delay — the never-stall safety net (in Progression Mode, paid from the treasury, and never a player's own order; while the exchange is on, the exchange's goods at four times their exchange value by default) |
-| Milestones | Colony chat on completed constructions and population growth |
+| `/colonyautopilot status` | What every colony is doing and waiting for |
+| `/colonyautopilot problems` | The things that need a human |
+| `/colonyautopilot treasury` | The balance and the day's ledger |
+| `/colonyautopilot exchange` | Sell valuables for bucks |
+| `/colonyautopilot chat off` | Silence the colony's chat for yourself |
+| `/colonyautopilot expansion off` | No new buildings; upgrades continue |
+| `/colonyautopilot off` | Hand the colony back to plain MineColonies |
 
-All colony logic runs on the server, and it is dedicated-server-safe. MineColonies' own AI keeps
-running; the addon works around it and changes a few of its rules, each behind a switch: the
-`[tweaks]` section (graves, mourning, food-quality happiness, work in rain, tool tiers, arrival at
-lifted huts and more), the guard posts it holds for the towers it staffs, the infirmary's cure for
-the sick, MineColonies_Tweaks' and MineColonies_Compatibility's hut pages kept to the colony's
-owner and officers while the autopilot is on, and in Progression Mode the locked Postbox (so
-nothing a player orders is conjured), the restaurant and nether-mine menus and Tweaks' "Request
-Cost?" order.
+The full list, including the operator commands, is in [COMMANDS.md](COMMANDS.md).
 
-**Progression Mode** (on for every colony by default): what the autopilot conjures (requested
-items, build materials, guard gear, the warehouse's potions and scrolls, gear upgrades and
-research) and its cures of the sick and infected are paid for from the colony's treasury in
-**ColonyBucks**; food deliveries (the pantry and menus included), placement, roads and
-terraforming stay free, while a research's cost items are charged whatever they are. Hostile
-mobs drop the bucks (a guard's kill pays straight into the
-treasury, and every raider killed in a raid pays one, up to the raid's size), loot chests hold them, and the exchange sells
-them for valuables. Put them by hand in any rack of the town hall (or of a built
-warehouse), feed the Town Hall block with a hopper or pipe, or sneak-right-click it holding
-them. Only the colony spends ColonyBucks: the Postbox is locked while the mode is on. The town hall's **Exchange** tab (the
-ColonyBucks seal under Settings) shows the treasury in whole bucks, what waits for it and the day's ledger, opens the
-exchange, and lets the colony's owner and officers have every road and its lamps laid again (**Re-lay roads**, once a
-game-minute). The colony's owner and officers can switch the mode off on the town hall's autopilot page. Details in [COMMANDS.md](COMMANDS.md).
+## Playing with other mods
 
-## Requirements — exact tested versions
+These are detected automatically. None is required.
 
-| Component | Version |
+- **[Fungal Infection: Spore](https://www.curseforge.com/minecraft/mc-mods/fungal-infection-spore).** The colony gets a grace period of 50 in-game days before any spore creature spawns (set it before creating the world). Guards attack the infection on sight. The infection slows citizens instead of killing them, its other effects are cured, the creep is scrubbed off the colony's land and the ground it ate is filled back in, and spore mobs cannot break the colony's blocks.
+- **[Spore Inquisition](https://www.curseforge.com/minecraft/mc-mods/spore-inquisition)** (with Spore). The grace counts down in chat, then the RedNight falls at world spawn and the war begins.
+- **[TaCZ](https://www.curseforge.com/minecraft/mc-mods/tacz-1-21-1)** adds six gun enchantments. With its [MineColonies add-on](https://www.curseforge.com/minecraft/mc-mods/minecolonies-compatibility) too, the colony's ranged guards become gunners with a colony-issued rifle.
+- **[K-Turrets](https://www.curseforge.com/minecraft/mc-mods/k-turrets)** (with Spore). Turrets target the whole horde and take no damage.
+- **[GuideME](https://www.curseforge.com/minecraft/mc-mods/guideme)**, **[Patchouli](https://www.curseforge.com/minecraft/mc-mods/patchouli)** or **[Akashic Tome](https://www.curseforge.com/minecraft/mc-mods/akashic-tome)** turn the Field Guide into a searchable illustrated book and put the other mods' guides in your kit.
+
+## Style packs
+
+Every style that ships with MineColonies works, and the town is built in the style you pick at founding. Styles designed around fixed building positions, Fortress above all, look best when you place their buildings by hand and let the colony build, staff and upgrade them.
+
+## When something looks wrong
+
+- Start with `/colonyautopilot problems`. Once a day the colony also lists them in chat. Most say exactly what to do.
+- A build that is not rising is not necessarily stuck: it may be waiting for money (chat says so) or for a builder to finish another job. Builders who really are stuck are sent home and, if that fails, the job moves to another builder. You do not need to do anything.
+- A citizen who keeps getting stuck at one spot is reported with the coordinates, so you can go and fill the hole or bridge the gap.
+- Anything else: [open an issue](https://github.com/Back-wards/ColonyAutopilot/issues) with the mod version, the MineColonies version, and the lines from `logs/latest.log` that mention `ColonyAutopilot`.
+
+## For server owners and builders of the mod
+
+- **Server config:** `config/colonyautopilot-server.toml`, every key commented. It is the default for every colony; each colony's own values live in the world save.
+- **The growth plan:** `config/colonyautopilot-growthplan.json`. Edit it to change what gets built, in which order, and at how many citizens.
+- **Building from source:** JDK 21, then `./gradlew build` (Windows: `gradlew.bat build`); the jar lands in `build/libs/`. `./gradlew runClient` starts a dev client with MineColonies and its libraries. Optional mods go in `run/mods` yourself.
+
+| Tested with | Version |
 |---|---|
-| Minecraft | **1.21.1** (exactly — not 1.21.0, not 1.21.2+) |
-| NeoForge | **21.1.235** (dev-tested; any 21.1.x works for the colony stack. If you also run them: Naturalist needs ≥ 21.1.226, Spore ≥ 21.1.212, Create ≥ 21.1.219) |
-| MineColonies | **1.1.1368-1.21.1** (built and tested against; 1.1.1319 or later 1.21.1 builds accepted — the jar compiles to the same bytes against both) |
-| Structurize | 1.0.832-1.21.1 (required by MineColonies 1.1.1368; 1.0.810 with 1.1.1319) |
-| BlockUI | 1.0.199-1.21.1 (required by MineColonies) |
-| Domum Ornamentum | 1.0.223 (required by MineColonies) |
-| Multi-Piston | 1.2.51-1.21.1 (required by Structurize) |
+| Minecraft | 1.21.1 |
+| NeoForge | 21.1.235 (dev), 21.1.251 (modpack) |
+| MineColonies | 1.1.1368 (minimum 1.1.1319) |
+| Structurize / BlockUI / Domum Ornamentum | 1.0.832 / 1.0.199 / 1.0.223 |
 
-**Install:** drop `colonyautopilot-<version>.jar` into the instance's `mods/` folder alongside
-MineColonies and its libraries above, on NeoForge 21.1.x for Minecraft 1.21.1. Install it on the
-server AND on every client that joins, at the same version: the mod registers items (the Zone
-Marker and ColonyBucks) and a network channel, and NeoForge refuses a client without them or with
-another version. On the client it also brings the town hall's Autopilot page,
-`/colonyautopilot menu` and the `/colonyautopilot chat` mute.
+## Licence and credits
 
-## Protected zones — reserve ground the autopilot builds around
+GPL-3.0, for licence compatibility with MineColonies. This repository is the corresponding source of each CurseForge release, one tag per version. Not an official MineColonies project.
 
-Out of the box the autopilot only knows its *own* buildings and fields; it does not treat
-player-placed blocks as off-limits (terraforming flattens plain blocks, and a chosen plot is
-cleared before the blueprint pastes). **Protected zones** are how you fence off ground
-for your own builds — spore defenses, a bunker, anything: the autopilot then places no building,
-field or road, grades no terrain and fells no tree inside one, and its creep guard scrubs nothing
-there.
+Attribution check: at start-up the mod reads the `authors` field of its own `neoforge.mods.toml` (`Maker.java`). In 1.3 a build that no longer names Backwards still registers its items, configs and mixins but starts none of its directors; from the next release it only logs a warning. GPL-3.0 lets you change or remove the check in your own builds.
 
-- **Zone Marker wand** — handed to every player on first join (beside the build tool; the
-  Town Hall itself goes only to the world's founder), craftable as a Build Tool ringed by
-  8 sticks, or `/colonyautopilot zone wand`.
-  Right-click two corners to create a zone; sneak-right-click inside one to delete it (both need
-  the colony's right to manage its huts, Officer rank by default). While held, it draws your
-  zones as green wireframe boxes (single-player; the zones are enforced server-side regardless).
-- **Commands** — `/colonyautopilot zone list | clear` (per colony; `clear`, which removes every
-  zone of the colony at once, is op-only).
-- **Config** `[zones]` — `enabled` (true), `maxEdge` (48, clamps an oversize selection),
-  `maxPerColony` (24).
-
-## Fungal Infection: Spore (optional apocalypse)
-
-With [Fungal Infection: Spore](https://modrinth.com/mod/fungal-infectionspore) 2.2.0j+
-installed (needs NeoForge **21.1.212+**), the addon quietly extends itself — no hard
-dependency, pure runtime lookups:
-
-- **The guards fight the infection.** MineColonies guards only attack mobs on their hostile
-  list, and Spore's creatures aren't on it — out of the box every guard type ignores the
-  infection until personally bitten. The addon tags Spore's own creature list into
-  MineColonies' `minecolonies:hostile` tag, so knights, rangers and druids engage
-  the infected proactively (a data tag — inert without Spore installed).
-- **The village floor heals.** The infection's soil conversions (infested dirt, sand, red
-  sand, gravel, clay, soul sand, rooted mycelium — and vanilla mycelium, which is what
-  infected grass becomes) count as earth: the daily grounds sweep cuts the creep back to
-  clean dirt, doorstep dig-outs clear infested burial, and the farmer's field physical
-  cleanses infested farmland. The creep guard fills the ground it cures back up to where it
-  last found it clean (a root mass leaves no crater), refills what the creep hollowed under a
-  building, and lays the village's roads back; a road that has lost more than three blocks is
-  carved again within a game-day.
-- **The living are treated.** No medicine in MineColonies or vanilla recognizes Spore's
-  Mycelium Infection — an infected citizen would stand debuffed at his station, producing
-  nothing, until it killed him. The village nursing round draws the infection out of living
-  citizens (in Progression Mode at the price of the dearest MineColonies disease's cure). Toggle:
-  `spores.cureInfection` in the server config.
-- **The quiet years (grace period).** `spores.gracePeriodDays` (server config, **default `50`**)
-  holds the infection off while the world is younger than that many game-time days: **NO new
-  spore creatures spawn — mounds, apostles, raid summons, and even manually `/summon`ed or
-  spawn-egg'd spore mobs** (you hear the spawn sound, but the mob is culled the same tick) —
-  giving the colony room to grow before the apocalypse begins. With **Spore Inquisition**
-  installed it also sets **when** the once-per-world **rednight** lands — the default `50` gives
-  the colony ~50 game-days to reach pop 25+ and research its combat/population chain first, and
-  every 5 days the chat counts it down for everyone online (`Days before rednight - 50 Days`)
-  until it falls (the server's `milestones.enabled = false` silences the countdown; a player's
-  `/colonyautopilot chat off` does not, as it is the war's warning, like the alert horn); set
-  `1` to test the rednight on the very first night. **`0` disables the grace *and* the rednight**
-  (at `0` the addon steps aside for Spore Inquisition's own drop; the AutoColony Apocalypse modpack disables that, see below), so keep
-  `1`+ for the rednight. ⚠ **Set it at world CREATION.** And if spore ever seems *broken*
-  mid-game — nothing spawns, spawn eggs do nothing — **check this setting FIRST**: a large grace
-  is almost always why (it is NOT a mod conflict).
-- **The finale is player-triggered.** The [AutoColony Apocalypse](https://www.curseforge.com/minecraft/modpacks/autocolony-apocalypse) modpack ships [Spore Inquisition](https://www.curseforge.com/minecraft/mc-mods/spore-inquisition) with
-  `automaticFinalitas = false` (in `spore-inquisition-server.toml`), so world corruption caps at
-  99% and the apocalypse never auto-ends — *you* choose when to fight the final boss by making an
-  **offering** to the RedNight. To end the infection: craft an offering head (food +
-  `spore:biomass` — Tier 1 "Magnum Ientaculum" +25, Tier 2 "Cena Suprema" +50, Tier 3 "Desertum
-  ultimum" +100), **drop it onto the RedNight's biomass ground** (a `#spore:biomass_to_membrane`
-  block) to raise corruption to 99%, then present one more to begin **Finalitas** (→ the
-  `inqui:finalitas` arena → kill the "Nunny" Proto-Gravemind). Admin shortcuts:
-  `/function inqui:0_config` or `/scoreboard players set !finale finalitas -1`. Full step-by-step
-  on the in-game guide's Offerings & the Finale page (`/colonyautopilot guide`) and in the
-  Spore/SI codebook.
-
-## Building
-
-JDK 21 required.
-
-```
-./gradlew build      # jar lands in build/libs/ (Windows: gradlew.bat build)
-./gradlew runClient  # dev client with MineColonies and its libraries; put optional mods in run/mods yourself
-```
-
-## Commands
-
-In-game controls: `/colonyautopilot status` and `report` (what every colony is doing),
-`problems` (what needs a human), `settings [section]` (every key with its value, range and
-default; `settings <section.key>` says what a key does), the per-player `chat on|off` mute,
-`zone wand|list`, `guide`, `exchange` (valuables
-for ColonyBucks) and `treasury [<id>]` (a colony's ColonyBucks; these two need access to that
-colony's huts) — all open to any survival player. The switches that change the village for
-everyone need op (in single-player, cheats): the master `on|off`, `expansion on|off`,
-`golems on|off`, `problems on|off`, `set <section.key> <value>`,
-`colony [<id>] settings|set|reset` (one colony's own settings),
-`colony [<id>] treasury add <n>` (credit a colony's ColonyBucks) and `zone clear`.
-`menu` opens the autopilot page of the colony you stand in, or the nearest
-(client-side; looking needs access to the colony's huts, changing its owner or officer rank). Details in [COMMANDS.md](COMMANDS.md).
-
-## Configuration
-
-`config/colonyautopilot-server.toml` — the default for every colony; since 1.3 each colony can
-carry its own values (town hall → Settings → **Autopilot settings**, or `/colonyautopilot menu`;
-owner and officers may change, everyone with hut access may look; a few keys are server-wide
-and say so). The sections: `autoupgrade` (enable, check interval),
-`trickle` (enable, items/minute), `growth` (enable, placement cooldown minutes = the village's
-pace, search radius, plot padding, terrain tolerance, endless expansion, the daily hut-settings
-profile and pond/field upkeep), `providence` (enable, delay seconds, items per sweep, and a
-switch per category: food, tools, armour/weapons, building materials, guard gear, recruit
-costs, restaurant menus), `repair` + `milestones` + `problems` (enables), `spores` (cureInfection,
-**gracePeriodDays** — the Fungal Infection: Spore extras; `gracePeriodDays`
-holds off ALL spore spawning for N game-time days [default 50 — set at world creation; 1 drops the rednight on the first night, 0 = no rednight], and with
-Spore Inquisition installed it sets when rednight lands), `workshops` (recipe teaching, warehouse
-stock and janitor; `purgeMobDrops` — the colony-wide mob-drop purge — is opt-in), `tweaks`
-(workersWorkInRain, vanilla patrols, fire tick, spawn cap, chunk-keeping, `villageGolem`,
-`workBudgetPerTick` — the land-work cap shared by every colony's terraforming — and
-more), and `economy` (Progression Mode, per colony; server-wide: what a buck buys, gear weight,
-research fee, drop and chest rates, the exchange's offers, the builder cap).
-`/colonyautopilot settings <section>` prints any section in-game.
-
-`config/colonyautopilot-growthplan.json` — the growth plan, written with defaults on first run.
-Ordered entries of `{hut, name, minCitizens, targetCount, targetLevel}`; `targetCount` is
-cumulative per hut type, `minCitizens` gates that entry and everything after it. `targetLevel` > 0
-makes the entry a level rung: the plan holds until a building of that hut stands at that level. The
-default plan uses rungs for the Town Hall, levels 1 to 5 (at 0, 10, 18, 20 and 22 citizens), and the
-autopilot drives the hall's own upgrade while a hall rung holds; a rung on any other hut only waits
-for the ordinary upgrade ladder, which caps huts at the Town Hall's level + 1. Other levels are not
-planned: everything upgrades to max over time. In Progression Mode list the Builder's Hut early (the
-default plan has it second): until one is built, every other placement is held.
-
-## License
-
-GPL-3.0, for license compatibility with MineColonies. Not an official MineColonies project.
-
-Attribution check: at start-up the mod reads the `authors` field of its own `neoforge.mods.toml` (`Maker.java`). In 1.3 a build that no longer names Backwards still registers its items, configs and mixins but starts none of its directors (`ColonyAutopilot.java`); from the next release it only logs a warning. GPL-3.0 lets you change or remove the check in your own builds.
+Third-party assets and their licences are listed in [NOTICE.md](NOTICE.md).
