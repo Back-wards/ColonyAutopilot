@@ -1,0 +1,26 @@
+{
+  "neoforge:conditions": [
+    {
+      "type": "neoforge:mod_loaded",
+      "modid": "tacz"
+    }
+  ],
+  "anvil_cost": 2,
+  "description": {
+    "translate": "enchantment.colonyautopilot.marksman"
+  },
+  "max_cost": {
+    "base": 30,
+    "per_level_above_first": 10
+  },
+  "max_level": 3,
+  "min_cost": {
+    "base": 5,
+    "per_level_above_first": 10
+  },
+  "slots": [
+    "mainhand"
+  ],
+  "supported_items": "#colonyautopilot:enchantable/gun",
+  "weight": 5
+}

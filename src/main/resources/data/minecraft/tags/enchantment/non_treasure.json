@@ -1,0 +1,29 @@
+{
+  "replace": false,
+  "values": [
+    {
+      "id": "colonyautopilot:high_caliber",
+      "required": false
+    },
+    {
+      "id": "colonyautopilot:fungicide",
+      "required": false
+    },
+    {
+      "id": "colonyautopilot:marksman",
+      "required": false
+    },
+    {
+      "id": "colonyautopilot:shrapnel",
+      "required": false
+    },
+    {
+      "id": "colonyautopilot:cryo_rounds",
+      "required": false
+    },
+    {
+      "id": "colonyautopilot:incendiary",
+      "required": false
+    }
+  ]
+}

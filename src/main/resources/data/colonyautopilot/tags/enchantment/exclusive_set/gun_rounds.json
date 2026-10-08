@@ -1,0 +1,12 @@
+{
+  "values": [
+    {
+      "id": "colonyautopilot:cryo_rounds",
+      "required": false
+    },
+    {
+      "id": "colonyautopilot:incendiary",
+      "required": false
+    }
+  ]
+}

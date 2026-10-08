@@ -1,0 +1,26 @@
+{
+  "neoforge:conditions": [
+    {
+      "type": "neoforge:mod_loaded",
+      "modid": "tacz"
+    }
+  ],
+  "anvil_cost": 4,
+  "description": {
+    "translate": "enchantment.colonyautopilot.shrapnel"
+  },
+  "max_cost": {
+    "base": 40,
+    "per_level_above_first": 10
+  },
+  "max_level": 3,
+  "min_cost": {
+    "base": 10,
+    "per_level_above_first": 10
+  },
+  "slots": [
+    "mainhand"
+  ],
+  "supported_items": "#colonyautopilot:enchantable/gun",
+  "weight": 2
+}

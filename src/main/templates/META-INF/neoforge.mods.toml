@@ -1,0 +1,50 @@
+modLoader="javafml"
+
+loaderVersion="${loader_version_range}"
+
+license="${mod_license}"
+
+[[mods]]
+
+modId="${mod_id}"
+
+version="${mod_version}"
+
+displayName="${mod_name}"
+
+credits="Made by Backwards"
+
+authors="Backwards"
+
+description='''
+The colony runs itself: an autopilot for MineColonies that plans the whole
+build order, places and upgrades every hut, hires, feeds, equips and
+researches on its own, keeps roads, lamps, fields and stock repaired, and
+defends the village through the Fungal Infection: Spore apocalypse (creep
+scrubbing, reactive defense, the scheduled RedNight). Every behavior has a
+config key - autonomy is the default, never a mandate.
+'''
+
+[[mixins]]
+config="${mod_id}.mixins.json"
+
+[[dependencies.${mod_id}]]
+    modId="neoforge"
+    type="required"
+    versionRange="${neo_version_range}"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
+    modId="minecraft"
+    type="required"
+    versionRange="${minecraft_version_range}"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
+    modId="minecolonies"
+    type="required"
+    versionRange="${minecolonies_version_range}"
+    ordering="AFTER"
+    side="BOTH"

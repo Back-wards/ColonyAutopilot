@@ -1,0 +1,14 @@
+<window size="524 290">
+    <image id="exchange0" pos="56 222" size="31 14" source="minecolonies:textures/gui/bookmark_short_ribbon_01.png"/>
+
+    <button id="exchange1" size="204 17" pos="58 43" source="minecolonies:textures/gui/bookmark_ribbon_01.png" visible="false"
+            label="$(colonyautopilot.gui.exchange)"
+            textalign="MIDDLE_LEFT" textoffset="35 2" textcolor="White" textdisabledcolor="DarkGray"/>
+
+    <button id="exchangeExt" pos="-17 222" size="104 14" source="minecolonies:textures/gui/bookmark_medium_ribbon_01.png" visible="false"
+            label="$(colonyautopilot.gui.exchange)"
+            textalign="MIDDLE_LEFT" textcolor="White" textoffset="8 1"/>
+
+    <button id="exchange" size="17 17" pos="62 220" onHoverId="exchangeExt"
+            source="colonyautopilot:textures/gui/wax_exchange.png"/>
+</window>

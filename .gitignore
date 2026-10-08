@@ -1,0 +1,28 @@
+# Gradle
+.gradle/
+build/
+repo/
+
+# Dev runs
+run/
+run-*/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+eclipse/
+out/
+bin/
+.classpath
+.project
+.settings/
+
+# Generated / local
+src/generated/
+local-client.jvmargs
+
+# JVM crash dumps
+hs_err_pid*.log
+replay_pid*.log
+*.hprof

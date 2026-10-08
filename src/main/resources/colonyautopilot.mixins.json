@@ -1,0 +1,33 @@
+{
+  "required": true,
+  "minVersion": "0.8.5",
+  "package": "com.backwards.colonyautopilot.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "WorkerUtilMixin",
+    "EntityNavigationUtilsMixin",
+    "CitizenFoodHandlerMixin",
+    "EntityCitizenGraveMixin",
+    "VisitorCitizenDropMixin",
+    "VisitorManagerMixin",
+    "PathingStuckHandlerMixin",
+    "EntityAIWorkFishermanMixin",
+    "GunEnchantabilityMixin",
+    "MobCategoryAccessor",
+    "MobEffectInstanceAccessor",
+    "PostBoxRequestMixin",
+    "PostBoxStockLineMixin",
+    "PostBoxStockTickMixin",
+    "ModuleMessagePermissionMixin",
+    "RaidManagerMixin",
+    "ResearchCostRequestMixin",
+    "RestaurantMenuMixin"
+  ],
+  "client": [
+    "client.WindowSettingsMixin",
+    "client.AbstractWindowTownHallMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

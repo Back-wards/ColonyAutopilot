@@ -1,0 +1,12 @@
+{
+  "values": [
+    {
+      "id": "colonyautopilot:high_caliber",
+      "required": false
+    },
+    {
+      "id": "colonyautopilot:fungicide",
+      "required": false
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+<window size="524 290">
+    <layout source="minecolonies:gui/townhall/windowtownhall.xml"/>
+
+    <list id="sections" size="148 152" pos="100 64">
+        <view size="100% 19">
+            <button id="section" size="129 17" pos="9 1" color="black"
+                    source="minecolonies:textures/gui/builderhut/builder_button_medium_large.png"
+                    disabled="minecolonies:textures/gui/builderhut/builder_button_medium_large_disabled.png"/>
+        </view>
+    </list>
+
+    <text id="status" size="148 27" pos="271 26" color="black" textalign="MIDDLE" wrap="true"/>
+
+    <list id="keys" size="148 160" pos="271 56">
+        <box size="100% 32" linewidth="1">
+            <text id="name" size="136 11" pos="3 2" color="black"/>
+            <button id="reset" size="36 16" pos="2 14" align="TOP_RIGHT" color="black" visible="false"
+                    label="$(colonyautopilot.gui.reset)"
+                    source="minecolonies:textures/gui/builderhut/builder_button_very_small.png"
+                    disabled="minecolonies:textures/gui/builderhut/builder_button_very_small_disabled.png"/>
+            <button id="toggle" size="29 16" pos="3 14" color="black" visible="false"
+                    source="minecolonies:textures/gui/builderhut/builder_button_very_small.png"
+                    disabled="minecolonies:textures/gui/builderhut/builder_button_very_small_disabled.png"/>
+            <input id="field" size="58 14" pos="3 15" maxlength="16" visible="false"/>
+            <button id="apply" size="29 16" pos="64 14" color="black" visible="false"
+                    label="$(colonyautopilot.gui.set)"
+                    source="minecolonies:textures/gui/builderhut/builder_button_very_small.png"
+                    disabled="minecolonies:textures/gui/builderhut/builder_button_very_small_disabled.png"/>
+            <text id="info" size="43 11" pos="97 17" color="gray"/>
+        </box>
+    </list>
+</window>

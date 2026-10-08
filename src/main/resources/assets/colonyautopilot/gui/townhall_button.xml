@@ -1,0 +1,6 @@
+<window size="524 290">
+    <text size="148 11" pos="271 100" color="black" textalign="MIDDLE" label="$(colonyautopilot.gui.title)"/>
+    <text size="148 22" pos="271 112" color="black" textalign="MIDDLE" wrap="true" label="$(colonyautopilot.gui.blurb)"/>
+    <button id="colonyautopilot" size="129 17" pos="281 138" color="black" label="$(colonyautopilot.gui.open)"
+            source="minecolonies:textures/gui/builderhut/builder_button_medium_large.png"/>
+</window>

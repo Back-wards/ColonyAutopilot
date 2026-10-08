@@ -1,0 +1,25 @@
+<window size="524 290">
+    <layout source="minecolonies:gui/townhall/windowtownhall.xml"/>
+    <layout source="colonyautopilot:gui/townhall_exchange_tab.xml"/>
+
+    <text id="balance" size="148 20" pos="100 64" color="black" textalign="MIDDLE" visible="false"/>
+    <list id="summary" size="148 90" pos="100 86">
+        <view size="100% 10">
+            <text id="line" size="138 10" pos="1 0" color="black" textalign="MIDDLE_LEFT"/>
+        </view>
+    </list>
+    <button id="trade" size="129 17" pos="110 179" color="black" visible="false"
+            label="$(colonyautopilot.gui.trade)"
+            source="minecolonies:textures/gui/builderhut/builder_button_medium_large.png"/>
+    <button id="relayroads" size="129 17" pos="110 198" color="black" visible="false"
+            label="$(colonyautopilot.gui.roads)"
+            source="minecolonies:textures/gui/builderhut/builder_button_medium_large.png"
+            disabled="minecolonies:textures/gui/builderhut/builder_button_medium_large_disabled.png"/>
+
+    <text size="148 11" pos="271 28" color="black" textalign="MIDDLE" label="$(colonyautopilot.gui.ledger.title)"/>
+    <list id="ledger" size="148 170" pos="271 46">
+        <view size="100% 10">
+            <text id="line" size="138 10" pos="1 0" color="black" textalign="MIDDLE_LEFT"/>
+        </view>
+    </list>
+</window>
