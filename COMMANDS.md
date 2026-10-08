@@ -2,7 +2,7 @@
 
 They all live under `/colonyautopilot`. The read-only commands and the item hand-outs work
 for any survival player; the ones that change the village for everyone (marked **op**) need
-operator permission on a server — in single-player with cheats on, that is you. A pack guide
+operator permission on a server — in single-player with cheats on, that is you. A style-pack guide
 follows the commands.
 
 | Command | What it does |
@@ -205,7 +205,7 @@ colonies that predate it.
   says on opening what one is worth to it stocked where that line names and what it fetches here (a diamond: 2.25
   stocked, 0.50 here; for a form the exchange does not buy as it is, an ore say, it says so). The screen closes if
   you walk more than 8 blocks away. While the exchange is on, in Progression Mode the
-  exchange's goods and their ore, raw, nugget, dust and block forms, and what the pack's
+  exchange's goods and their ore, raw, nugget, dust and block forms, and what the AutoColony Apocalypse modpack's
   machines turn into them (netherite scrap, ancient debris, gilded blackstone, ochrum, horse
   armour, a jukebox, Mystical Agriculture's essences), are priced over their exchange value (a gold block costs four times what nine ingots sell for
   by default, economy.conjureMarkup), so buying

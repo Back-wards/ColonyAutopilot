@@ -9,6 +9,8 @@ into a **living village**: place the Town Hall, confirm founding, and walk away.
 its own buildings, builds and upgrades them, gathers its own materials at a configurable pace,
 repairs itself after raids, and tells you about its milestones in chat.
 
+**Needs:** Minecraft 1.21.1, NeoForge 21.1 (any 21.1.x; 21.1.235 is the dev-tested build) and [MineColonies](https://www.curseforge.com/minecraft/mc-mods/minecolonies) 1.1.1319 or newer with its libraries. **Install:** drop the jar into `mods/` on the server and on every client, the same version everywhere. **Bugs and questions:** https://github.com/Back-wards/ColonyAutopilot/issues (not MineColonies' tracker). The full version table is under Requirements.
+
 The player keeps the drama: quests, raid defense and the endgame. Research and visitor recruiting
 are automated by default (`research.autoResearch`, `research.forks`/`research.capstones` and
 `providence.recruitVisitors` hand them back), and the warehouse janitor trims the surplus.
@@ -52,7 +54,7 @@ game-minute). The colony's owner and officers can switch the mode off on the tow
 | Component | Version |
 |---|---|
 | Minecraft | **1.21.1** (exactly — not 1.21.0, not 1.21.2+) |
-| NeoForge | **21.1.235** (dev-tested; Naturalist needs ≥ 21.1.226 — Spore ≥ 21.1.212, Create ≥ 21.1.219; the plain colony stack accepts any 21.1.x) |
+| NeoForge | **21.1.235** (dev-tested; any 21.1.x works for the colony stack. If you also run them: Naturalist needs ≥ 21.1.226, Spore ≥ 21.1.212, Create ≥ 21.1.219) |
 | MineColonies | **1.1.1368-1.21.1** (built and tested against; 1.1.1319 or later 1.21.1 builds accepted — the jar compiles to the same bytes against both) |
 | Structurize | 1.0.832-1.21.1 (required by MineColonies 1.1.1368; 1.0.810 with 1.1.1319) |
 | BlockUI | 1.0.199-1.21.1 (required by MineColonies) |
@@ -70,7 +72,7 @@ another version. On the client it also brings the town hall's Autopilot page,
 
 Out of the box the autopilot only knows its *own* buildings and fields; it does not treat
 player-placed blocks as off-limits (terraforming flattens plain blocks, and a chosen plot is
-cleared before the blueprint pastes). **Protected zones** (v1.1.41) are how you fence off ground
+cleared before the blueprint pastes). **Protected zones** are how you fence off ground
 for your own builds — spore defenses, a bunker, anything: the autopilot then places no building,
 field or road, grades no terrain and fells no tree inside one, and its creep guard scrubs nothing
 there.
@@ -85,11 +87,6 @@ there.
   zone of the colony at once, is op-only).
 - **Config** `[zones]` — `enabled` (true), `maxEdge` (48, clamps an oversize selection),
   `maxPerColony` (24).
-
-Implemented as a per-level `SavedData` of colony-keyed footprints, injected into the three
-placement/terraform chokepoints that already thread `SiteSelector.Footprint` boxes:
-`SiteSelector.prep` (placement + terraform-site search), `GrowthDirector.sacredGround`
-(terraform grading, roads, field layout), and `GroundsWarden.buildingBoxes` (patrol tree-fell).
 
 ## Fungal Infection: Spore (optional apocalypse)
 
@@ -126,11 +123,11 @@ dependency, pure runtime lookups:
   until it falls (the server's `milestones.enabled = false` silences the countdown; a player's
   `/colonyautopilot chat off` does not, as it is the war's warning, like the alert horn); set
   `1` to test the rednight on the very first night. **`0` disables the grace *and* the rednight**
-  (at `0` the addon steps aside for SI's own drop; the official modpack disables that, see below), so keep
+  (at `0` the addon steps aside for Spore Inquisition's own drop; the AutoColony Apocalypse modpack disables that, see below), so keep
   `1`+ for the rednight. ⚠ **Set it at world CREATION.** And if spore ever seems *broken*
   mid-game — nothing spawns, spawn eggs do nothing — **check this setting FIRST**: a large grace
   is almost always why (it is NOT a mod conflict).
-- **The finale is player-triggered.** The official modpack, AutoColony Apocalypse, ships Spore Inquisition with
+- **The finale is player-triggered.** The [AutoColony Apocalypse](https://www.curseforge.com/minecraft/modpacks/autocolony-apocalypse) modpack ships [Spore Inquisition](https://www.curseforge.com/minecraft/mc-mods/spore-inquisition) with
   `automaticFinalitas = false` (in `spore-inquisition-server.toml`), so world corruption caps at
   99% and the apocalypse never auto-ends — *you* choose when to fight the final boss by making an
   **offering** to the RedNight. To end the infection: craft an offering head (food +
@@ -201,4 +198,4 @@ default plan has it second): until one is built, every other placement is held.
 
 GPL-3.0, for license compatibility with MineColonies. Not an official MineColonies project.
 
-Attribution check: at start-up the mod reads the `authors` field of its own `neoforge.mods.toml` and, in 1.3, stays off when it no longer names Backwards (`Maker.java`). GPL-3.0 lets you change or remove that check in your own builds; the 1.3 release carries it as shipped, and the next release replaces it with a log line.
+Attribution check: at start-up the mod reads the `authors` field of its own `neoforge.mods.toml` (`Maker.java`). In 1.3 a build that no longer names Backwards still registers its items, configs and mixins but starts none of its directors (`ColonyAutopilot.java`); from the next release it only logs a warning. GPL-3.0 lets you change or remove the check in your own builds.
