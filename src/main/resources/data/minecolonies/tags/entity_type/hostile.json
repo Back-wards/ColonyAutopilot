@@ -1,6 +1,11 @@
 {
   "replace": false,
   "values": [
-    { "id": "#spore:fungus_entities", "required": false }
+    { "id": "#spore:fungus_entities", "required": false },
+    { "id": "spore:inf_player", "required": false },
+    { "id": "spore:chemist", "required": false },
+    { "id": "spore:bairn", "required": false },
+    { "id": "spore:hollen", "required": false },
+    { "id": "spore:verfall_head", "required": false }
   ]
 }

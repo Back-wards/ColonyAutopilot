@@ -1,0 +1,7 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "ars_nouveau:summon_skeleton", "required": false },
+    { "id": "ars_nouveau:ally_vex", "required": false }
+  ]
+}

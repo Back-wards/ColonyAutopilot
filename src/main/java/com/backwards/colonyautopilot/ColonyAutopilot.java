@@ -32,6 +32,9 @@ public class ColonyAutopilot
     public static final String MOD_ID = "colonyautopilot";
     public static final Logger LOGGER = LogUtils.getLogger();
 
+    public static final net.minecraft.tags.TagKey<net.minecraft.world.entity.EntityType<?>> GUARDS_IGNORE = net.minecraft.tags.TagKey.create(
+      net.minecraft.core.registries.Registries.ENTITY_TYPE, net.minecraft.resources.ResourceLocation.fromNamespaceAndPath(MOD_ID, "guards_ignore"));
+
     private static final boolean RIG_ACTIVE_COLONIES = Boolean.getBoolean("colonyautopilot.rig.activeColonies");
 
     private static final boolean RIG_COLONY_EVENTS = Boolean.getBoolean("colonyautopilot.rig.colonyEvents");
@@ -57,8 +60,13 @@ public class ColonyAutopilot
 
         if (!Maker.intact(container))
         {
-            LOGGER.error("Colony Autopilot stays off: this jar no longer carries its maker's mark");
-            return;
+            final String page = "https://www.curseforge.com/members/backwards/projects";
+            LOGGER.warn("this build no longer carries its maker's mark: Colony Autopilot was created by Backwards, " + page);
+            NeoForge.EVENT_BUS.addListener((final net.neoforged.neoforge.event.entity.player.PlayerEvent.PlayerLoggedInEvent event) ->
+              event.getEntity().sendSystemMessage(net.minecraft.network.chat.Component
+                .literal("This build of Colony Autopilot no longer carries its maker's mark. Colony Autopilot was created by Backwards: ")
+                .append(net.minecraft.network.chat.Component.literal(page).withStyle(style -> style.withUnderlined(true)
+                  .withClickEvent(new net.minecraft.network.chat.ClickEvent(net.minecraft.network.chat.ClickEvent.Action.OPEN_URL, page))))));
         }
         ProblemLedger.arm();
 

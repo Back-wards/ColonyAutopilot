@@ -321,7 +321,7 @@ public final class AutopilotConfig
           .define("enabled", true);
         TRICKLE_ITEMS_PER_MINUTE = builder
           .comment("Items per game-time minute (scales with /tick rate) added to each builder's hut that is actively constructing.")
-          .defineInRange("itemsPerMinute", 32, 1, 1024);
+          .defineInRange("itemsPerMinute", 64, 1, 1024);
         builder.pop();
 
         builder.push("growth");
@@ -835,9 +835,11 @@ public final class AutopilotConfig
         SPORES_TURRETS_TARGET_INFECTED = builder
           .comment("With BOTH 'Fungal Infection: Spore' and 'K-Turrets' installed: teach every turret and",
             "drone to target the infection's whole horde (the spore:fungus_entities tag, mounds",
-            "included). Turrets pick their default targets by spawn category and Spore registers",
-            "every creature as MISC — a 'friendly' category — so without this bridge the turrets",
-            "stand idle while the infected walk past. Does nothing unless both mods are present.")
+            "included). Turrets pick their default targets by spawn category; Spore 2.2 files most",
+            "of its horde in hostile categories, but the licker and the calamities' tails and arms",
+            "sit in MISC, a 'friendly' category the turrets skip. A turret re-learns the whole tag",
+            "each time it loads, so striking one of these off its list does not last. Does nothing",
+            "unless both mods are present.")
           .define("turretsTargetInfected", true);
         SPORES_GRACE_DAYS = builder
           .comment("The quiet years: while the world is younger than this many game-time days, NEW spore",

@@ -132,6 +132,6 @@ Every style that ships with MineColonies works, and the town is built in the sty
 
 GPL-3.0, for licence compatibility with MineColonies. This repository is the corresponding source of each CurseForge release, one tag per version. Not an official MineColonies project.
 
-Attribution check: at start-up the mod reads the `authors` field of its own `neoforge.mods.toml` (`Maker.java`). In 1.3 a build that no longer names Backwards still registers its items, configs and mixins but starts none of its directors; from the next release it only logs a warning. GPL-3.0 lets you change or remove the check in your own builds.
+Attribution check: at start-up the mod reads the `authors` field of its own `neoforge.mods.toml` (`Maker.java`). In 1.3 a build that no longer names Backwards still registers its items, configs and mixins but starts none of its directors; since 1.3.1 it runs normally, logs a warning and tells each player who joins, in chat, who made the mod. GPL-3.0 lets you change or remove the check in your own builds.
 
 Third-party assets and their licences are listed in [NOTICE.md](NOTICE.md).

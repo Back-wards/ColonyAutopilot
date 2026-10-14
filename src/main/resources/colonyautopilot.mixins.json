@@ -21,7 +21,9 @@
     "ModuleMessagePermissionMixin",
     "RaidManagerMixin",
     "ResearchCostRequestMixin",
-    "RestaurantMenuMixin"
+    "RestaurantMenuMixin",
+    "GuardTargetMixin",
+    "ThreatTableMixin"
   ],
   "client": [
     "client.WindowSettingsMixin",
