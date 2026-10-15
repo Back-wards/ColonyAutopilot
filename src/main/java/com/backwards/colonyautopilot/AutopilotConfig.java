@@ -983,7 +983,7 @@ public final class AutopilotConfig
             "(the id's namespace) is not installed is skipped; a wrong id for an installed mod still gives a",
             "book that says 'Invalid book', so keep this list to books the pack ships.")
           .defineListAllowEmpty("spawnPatchouliBooks",
-            java.util.List.of("mysticalagriculture:guide", "immortuoscalyx:genetic_explanation_material"),
+            java.util.List.of("mysticalagriculture:guide"),
             () -> "", o -> o instanceof String);
         WORKERS_WORK_IN_RAIN = builder
           .comment("Turn on MineColonies' 'workers always work in rain' setting on world start. Switched off (or",

@@ -15,9 +15,8 @@ On your first join of a world you receive the **founder's satchel**:
   (see [Protected Zones](protected-zones.md))
 * this **Field Guide**
 * a blank **Akashic Tome** plus the pack's other manuals — the **AE2 Guide**,
-  Ars Nouveau's **Worn Notebook**, the **Mystical Agriculture Guide Book** and
-  Immortuos Calyx's genetics primer — sneak-right-click any guide book onto the
-  tome to bind it (binding is manual by design; a pre-bound tome refuses to morph).
+  Ars Nouveau's **Worn Notebook** and the **Mystical Agriculture Guide Book** —
+  sneak-right-click any guide book onto the tome to bind it (binding is manual by design; a pre-bound tome refuses to morph).
   Mods with no manual of their own are covered in [The Other Mods](mod-primer.md)
 
 ## Your first days

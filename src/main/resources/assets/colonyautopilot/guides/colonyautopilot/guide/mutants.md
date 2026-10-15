@@ -90,8 +90,8 @@ Born in Chaos keeps the same first date: its creatures arrive on **day 25**.
   you hit them.
 * Your **guards** attack mutants on sight; **turrets** shoot them too (a turret
   placed before the mod arrived: sneak-right-click it and press *Reset the targets*).
-* The other monsters hate them: Born in Chaos creatures, the Spore infected and
-  Immortuos Calyx's infected all hunt mutants, and mutants hunt them back.
+* The other monsters hate them: Born in Chaos creatures and the Spore infected
+  hunt mutants, and mutants hunt them back.
 * A mutant killed by you, a citizen or a turret drops a **ColonyBuck** 1 time in
   30, like any hostile; giants of 150 health or more, the Intoxicator among them,
   drop none.

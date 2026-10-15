@@ -22,8 +22,6 @@ made, **U** to see what it's used for. Every recipe mentioned below is in there.
   Apparatus and your first spell.
 * **Mystical Agriculture** — its official **Guide Book** (the quick-start below
   gets you moving; the book has every detail).
-* **Immortuos Calyx** — its genetics primer explains that mod's own infection and
-  DNA-splicing system.
 * All of them bind onto the **Akashic Tome** like this guide does — sneak-right-click.
 
 ## Mystical Agriculture — grow your resources
