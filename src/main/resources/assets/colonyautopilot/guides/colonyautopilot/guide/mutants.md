@@ -33,8 +33,8 @@ Born in Chaos keeps the same first date: its creatures arrive on **day 25**.
 
 * A mutant's hit has a **40% chance** to give it, for five minutes. Killing a
   mutant can give it too.
-* On its own it does nothing. But **die while sick and you rise as an Assimilated
-  Roamer** — a mutant wearing your face.
+* On its own it does nothing. But **be killed by a mutant while sick and you rise
+  as an Assimilated Roamer** — a mutant bearing your name.
 * An animal or villager that dies sick — or simply stays sick until it wears off —
   **turns** into its assimilated form. Watch the colony's cows, sheep and pigs
   after a mutant gets into the pens.
@@ -79,8 +79,9 @@ Born in Chaos keeps the same first date: its creatures arrive on **day 25**.
 * **Mutagen Serum** — right-click an assimilated villager, trader or animal with
   it to turn it back. Four necroptor membranes around a glass bottle; scientists
   carry it.
-* Putrid flesh, hearts and brains and scrap metal from the fallen make the
-  infected weapons and the rusted metal armour — JEI has every recipe.
+* Putrid flesh, hearts and brains from the fallen, scrap metal (looted, or two
+  iron ingots and two iron nuggets) and netherite (one ingot for an infected
+  weapon, two for a rusted metal armour piece) — JEI has every recipe.
 
 ## Friends and the colony
 
@@ -88,7 +89,7 @@ Born in Chaos keeps the same first date: its creatures arrive on **day 25**.
   scientists and a helicopter that drops more of them. They leave you alone unless
   you hit them.
 * Your **guards** attack mutants on sight; **turrets** shoot them too (a turret
-  placed before the mod arrived: sneak-right-click it and press *Reset list*).
+  placed before the mod arrived: sneak-right-click it and press *Reset the targets*).
 * The other monsters hate them: Born in Chaos creatures, the Spore infected and
   Immortuos Calyx's infected all hunt mutants, and mutants hunt them back.
 * A mutant killed by you, a citizen or a turret drops a **ColonyBuck** 1 time in

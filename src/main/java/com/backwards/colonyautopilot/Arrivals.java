@@ -7,9 +7,10 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.MobSpawnType;
+import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.ModList;
-import net.neoforged.neoforge.event.entity.living.FinalizeSpawnEvent;
+import net.neoforged.neoforge.event.entity.living.MobSpawnEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
@@ -55,18 +56,18 @@ public class Arrivals
           : AutopilotConfig.ARRIVALS_MUTANTS_DAY).get();
     }
 
-    @SubscribeEvent
-    public void onFinalizeSpawn(final FinalizeSpawnEvent event)
+    @SubscribeEvent(priority = EventPriority.LOWEST)
+    public void onSpawnPlacementCheck(final MobSpawnEvent.SpawnPlacementCheck event)
     {
         if ((event.getSpawnType() != MobSpawnType.NATURAL && event.getSpawnType() != MobSpawnType.CHUNK_GENERATION)
               || !AutopilotConfig.SPEC.isLoaded())
         {
             return;
         }
-        final int day = arrivalDay(event.getEntity().getType());
+        final int day = arrivalDay(event.getEntityType());
         if (day > 0 && event.getLevel().getLevel().getGameTime() < day * 24000L)
         {
-            event.setSpawnCancelled(true);
+            event.setResult(MobSpawnEvent.SpawnPlacementCheck.Result.FAIL);
         }
     }
 
@@ -90,17 +91,22 @@ public class Arrivals
         {
             return;
         }
-        for (final String line : lines(server.overworld().getGameTime()))
+        for (final Line line : lines(server.overworld().getGameTime()))
         {
-            if (said.add(line))
+
+            if (said.add(line.day() + "|" + line.text()))
             {
 
-                server.getPlayerList().broadcastSystemMessage(Component.literal(line), false);
+                server.getPlayerList().broadcastSystemMessage(Component.literal(line.text()), false);
             }
         }
     }
 
-    static List<String> lines(final long gameTime)
+    record Line(int day, String text)
+    {
+    }
+
+    static List<Line> lines(final long gameTime)
     {
 
         final Map<Integer, List<String>> byDay = new TreeMap<>();
@@ -115,7 +121,7 @@ public class Arrivals
             byDay.computeIfAbsent(AutopilotConfig.ARRIVALS_ELITE_MUTANTS_DAY.get(), d -> new ArrayList<>()).add("the elite mutants");
             byDay.computeIfAbsent(AutopilotConfig.ARRIVALS_BOSS_MUTANTS_DAY.get(), d -> new ArrayList<>()).add("the mutant bosses");
         }
-        final List<String> lines = new ArrayList<>();
+        final List<Line> lines = new ArrayList<>();
         for (final Map.Entry<Integer, List<String>> arrival : byDay.entrySet())
         {
             if (arrival.getKey() <= 0)
@@ -129,12 +135,12 @@ public class Arrivals
                 final long daysLeft = (left + 23999L) / 24000L;
                 if (daysLeft <= COUNTDOWN_DAYS && daysLeft % 5 == 0)
                 {
-                    lines.add("Days before " + who + " - " + daysLeft + " Days");
+                    lines.add(new Line(arrival.getKey(), "Days before " + who + " - " + daysLeft + " Days"));
                 }
             }
             else if (left > -24000L)
             {
-                lines.add(Character.toUpperCase(who.charAt(0)) + who.substring(1) + " have come");
+                lines.add(new Line(arrival.getKey(), Character.toUpperCase(who.charAt(0)) + who.substring(1) + " have come"));
             }
         }
         return lines;

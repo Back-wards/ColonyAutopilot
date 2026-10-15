@@ -275,24 +275,29 @@ final class SporeCompat
 
     private static final Set<String> GRIEF_DESPITE_RULE = Set.of("proto", "hivetumor");
 
+    @net.neoforged.bus.api.SubscribeEvent(priority = net.neoforged.bus.api.EventPriority.HIGHEST)
+    public void onGriefDespiteRule(final net.neoforged.neoforge.event.entity.EntityMobGriefingEvent event)
+    {
+
+        if (event.getEntity().level() instanceof ServerLevel && isSporeEntity(event.getEntity()) && !event.isMobGriefingEnabled()
+              && GRIEF_DESPITE_RULE.contains(BuiltInRegistries.ENTITY_TYPE.getKey(event.getEntity().getType()).getPath())
+              && AutopilotConfig.live(AutopilotConfig.DISABLE_MOB_GRIEFING))
+        {
+            event.setCanGrief(true);
+        }
+    }
+
     @net.neoforged.bus.api.SubscribeEvent
     public void onSporeGriefing(final net.neoforged.neoforge.event.entity.EntityMobGriefingEvent event)
     {
         if (!AutopilotConfig.masterOn()
+              || !event.canGrief()
               || !isSporeEntity(event.getEntity())
               || !(event.getEntity().level() instanceof ServerLevel level))
         {
             return;
         }
         final ResourceLocation id = BuiltInRegistries.ENTITY_TYPE.getKey(event.getEntity().getType());
-        if (!event.canGrief())
-        {
-            if (!AutopilotConfig.live(AutopilotConfig.DISABLE_MOB_GRIEFING) || !GRIEF_DESPITE_RULE.contains(id.getPath()))
-            {
-                return;
-            }
-            event.setCanGrief(true);
-        }
         if (AutopilotConfig.SPORE_DEMOLITION_RIGHTS.get().contains(id.toString()))
         {
             return;

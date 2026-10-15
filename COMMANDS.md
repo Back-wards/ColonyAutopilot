@@ -24,7 +24,7 @@ follows the commands.
 | `/colonyautopilot exchange` | Trade diamonds, gold, ancient debris and netherite for ColonyBucks on the ordinary trading screen, in the colony you stand in (also: **Trade** on the town hall's **Exchange** tab). Anyone with access to the colony's huts may trade, while the colony is in Progression Mode |
 | `/colonyautopilot zone wand` / `list` / `clear` | A Zone Marker / this colony's protected zones / **op** — wipe them |
 | `/colonyautopilot guide` | Another copy of the field guide (needs the GuideME mod) |
-| `/colonyautopilot chat off` / `on` | Mute / restore colony chatter — for you only (the alert horn, the one-time Progression Mode notice and the rednight countdown still come through) |
+| `/colonyautopilot chat off` / `on` | Mute / restore colony chatter — for you only (the alert horn, the one-time Progression Mode notice, the rednight countdown and the monster arrivals' countdown still come through) |
 
 ## `/colonyautopilot status`
 
@@ -112,7 +112,7 @@ value even then, which is how you exempt a colony before moving the default.
 once: `set growth.terraform false`, `set tweaks.villageGolem false`, `set growth.placementCooldownMinutes 20`.
 Values are typed like the key's default and range-checked; lists stay file-only. The reply
 says when the change lands: most keys on the system's next pass; the monster spawn cap,
-potion durations and the world tweaks (rain work, vanilla patrols, fire tick, spawn chunks)
+potion durations and the world tweaks (rain work, vanilla patrols, fire tick, mob griefing, spawn chunks)
 at once, and a tweak switched off gives the world its own value back. Keys that have their
 own command (`master.enabled` — this world's switch — `problems.enabled`,
 `tweaks.villageGolem`) go through it, so `set tweaks.villageGolem false`

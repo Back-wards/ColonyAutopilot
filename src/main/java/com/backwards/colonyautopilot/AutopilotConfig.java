@@ -1179,8 +1179,9 @@ public final class AutopilotConfig
         MUTE_COLONY_CHAT = client
           .comment("Mute all colony chatter in YOUR chat only: MineColonies announcements (raids, research,",
             "deaths, citizen news) and the autopilot's village milestones. Toggled in-game with",
-            "/colonyautopilot chat on|off. Other players are unaffected. Three lines still come through, on",
-            "purpose: the alert horn, the one-time Progression Mode notice and the rednight countdown.")
+            "/colonyautopilot chat on|off. Other players are unaffected. Four lines still come through, on",
+            "purpose: the alert horn, the one-time Progression Mode notice, the rednight countdown and the",
+            "monster arrivals' countdown (arrivals.*).")
           .define("muteColonyChat", false);
         client.pop();
         CLIENT_SPEC = client.build();

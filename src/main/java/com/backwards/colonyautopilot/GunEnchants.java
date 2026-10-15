@@ -6,6 +6,7 @@ import com.minecolonies.api.colony.IColony;
 import com.minecolonies.api.colony.IColonyManager;
 import com.minecolonies.api.entity.ai.combat.threat.IThreatTableEntity;
 import com.minecolonies.api.entity.citizen.AbstractEntityCitizen;
+import com.minecolonies.core.colony.buildings.AbstractBuildingGuards;
 import com.minecolonies.core.entity.ai.workers.guard.AbstractEntityAIGuard;
 import com.minecolonies.core.util.citizenutils.CitizenItemUtils;
 import com.tacz.guns.api.entity.IGunOperator;
@@ -234,7 +235,9 @@ final class GunEnchants
     private static boolean followUp(final AbstractEntityCitizen citizen, final long shotAt)
     {
         final long since = citizen.level().getGameTime() - shotAt;
-        if (!citizen.isAlive() || since >= FOLLOW_UP_TICKS || !(citizen instanceof IThreatTableEntity fighter))
+
+        if (!citizen.isAlive() || since >= FOLLOW_UP_TICKS || !(citizen instanceof IThreatTableEntity fighter)
+              || citizen.getCitizenData() == null || !(citizen.getCitizenData().getWorkBuilding() instanceof AbstractBuildingGuards))
         {
             return false;
         }

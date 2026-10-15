@@ -49,7 +49,7 @@ In Progression Mode the colony is not supplied out of thin air. What it cannot m
 
 **Earning bucks**
 
-- A hostile mob drops a buck one time in thirty when you, a citizen, or something you own (a golem, a turret, a tamed wolf) kills it. A citizen's kill goes straight into the treasury.
+- A hostile mob drops a buck one time in thirty when you, a citizen, or something you own (a turret, a tamed wolf) kills it. A citizen's kill goes straight into the treasury.
 - Dungeon and other structure chests hold six to fifteen bucks; mineshaft chests two to five.
 - Every raider killed during a raid pays one buck.
 - The **exchange** buys valuables for bucks: two diamonds for one buck, a diamond block for five, sixteen gold ingots for one, one ancient debris for one, a netherite ingot for four. Open it with `/colonyautopilot exchange` or the **Trade** button on the town hall's Exchange tab. It only ever buys. Bucks buy nothing back: only the colony spends them.
@@ -103,7 +103,7 @@ These are detected automatically. None is required.
 - **[TaCZ](https://www.curseforge.com/minecraft/mc-mods/tacz-1-21-1)** adds six gun enchantments. With its [MineColonies add-on](https://www.curseforge.com/minecraft/mc-mods/minecolonies-compatibility) too, the colony's ranged guards become gunners with a colony-issued rifle.
 - **[K-Turrets](https://www.curseforge.com/minecraft/mc-mods/k-turrets)** (with Spore). Turrets target the whole horde and take no damage.
 - **[Born in Chaos](https://www.curseforge.com/minecraft/mc-mods/born-in-chaos)** and **[Mutationcraft](https://www.curseforge.com/minecraft/mc-mods/mutationcraft)**. Their monsters arrive on a schedule the chat counts down: Born in Chaos and the first mutants on day 25, advanced mutants on day 50, elite mutants on day 100, the mutant bosses on day 200. Until then they do not spawn naturally.
-- **[GuideME](https://www.curseforge.com/minecraft/mc-mods/guideme)**, **[Patchouli](https://www.curseforge.com/minecraft/mc-mods/patchouli)** or **[Akashic Tome](https://www.curseforge.com/minecraft/mc-mods/akashic-tome)** give you the Field Guide, a searchable illustrated book (GuideME; Applied Energistics 2 brings it along), and put the other mods' guides in your kit.
+- **[GuideME](https://www.curseforge.com/minecraft/mc-mods/guideme)** gives you the Field Guide, a searchable illustrated book (Applied Energistics 2 brings it along). **[Patchouli](https://www.curseforge.com/minecraft/mc-mods/patchouli)** or **[Akashic Tome](https://www.curseforge.com/minecraft/mc-mods/akashic-tome)** put the other mods' guides in your kit.
 
 ## Style packs
 
