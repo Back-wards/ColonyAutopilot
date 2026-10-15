@@ -67,8 +67,12 @@ final class SpawnKit
         {
             give(player, new ItemStack(com.backwards.colonyautopilot.ModItems.ZONE_MARKER.get()));
         }
+
         final ItemStack fieldGuide = GuideMeCompat.guideStack();
-        give(player, fieldGuide.isEmpty() ? FieldGuide.book() : fieldGuide);
+        if (!fieldGuide.isEmpty())
+        {
+            give(player, fieldGuide);
+        }
 
         if (ModList.get().isLoaded("akashictome"))
         {

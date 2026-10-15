@@ -170,5 +170,6 @@ it. Build it near a dark room or a dungeon spawner from your explorations.
 * **K-Turrets** and the colony's own defenses — [Fighting Back](fighting-back.md)
 * **Spore & Spore Inquisition** — [The Spore Infection](the-infection.md),
   [Bestiary](bestiary.md), [Survival Kit](survival-kit.md)
+* **Mutationcraft** — [The Mutants](mutants.md)
 * **MineColonies itself** — the autopilot runs it for you:
   [Autopilot Systems](autopilot-features.md)

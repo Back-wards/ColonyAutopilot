@@ -97,6 +97,11 @@ public final class AutopilotConfig
     public static final ModConfigSpec.BooleanValue SPORES_TURRETS_INVULNERABLE;
     public static final ModConfigSpec.IntValue SPORES_GRACE_DAYS;
     public static final ModConfigSpec.BooleanValue SPORES_CREEP_GUARD;
+    public static final ModConfigSpec.IntValue ARRIVALS_BORN_IN_CHAOS_DAY;
+    public static final ModConfigSpec.IntValue ARRIVALS_MUTANTS_DAY;
+    public static final ModConfigSpec.IntValue ARRIVALS_ADVANCED_MUTANTS_DAY;
+    public static final ModConfigSpec.IntValue ARRIVALS_ELITE_MUTANTS_DAY;
+    public static final ModConfigSpec.IntValue ARRIVALS_BOSS_MUTANTS_DAY;
     public static final ModConfigSpec.BooleanValue GUN_ENCHANTMENTS;
     public static final ModConfigSpec.BooleanValue FULL_AUTO_GUNNERS;
     public static final ModConfigSpec.BooleanValue GUNNER_GUARDS;
@@ -109,6 +114,7 @@ public final class AutopilotConfig
     public static final ModConfigSpec.BooleanValue VILLAGE_GOLEM;
     public static final ModConfigSpec.BooleanValue MUTE_FD_RECIPE_ERRORS;
     public static final ModConfigSpec.BooleanValue DISABLE_FIRE_TICK;
+    public static final ModConfigSpec.BooleanValue DISABLE_MOB_GRIEFING;
     public static final ModConfigSpec.BooleanValue IGNORE_FOOD_QUALITY;
     public static final ModConfigSpec.BooleanValue IGNORE_TOOL_TIER;
     public static final ModConfigSpec.BooleanValue REACH_HUT_ANY_HEIGHT;
@@ -889,6 +895,34 @@ public final class AutopilotConfig
           .define("turretsInvulnerable", true);
         builder.pop();
 
+        builder.push("arrivals");
+        ARRIVALS_BORN_IN_CHAOS_DAY = builder
+          .comment("With Born in Chaos: its creatures do not spawn naturally while the world is younger than this many",
+            "game-days, so a new colony is not mauled on its first nights. Only natural spawns are held -",
+            "spawners, structures and summons are not, and creatures already in the world stay. Days count like",
+            "spores.gracePeriodDays (24000 game ticks each). The chat counts the arrival down every 5 days for",
+            "its last 25, 'Days before the Born in Chaos creatures - 20 Days', like the rednight. 0 holds nothing.")
+          .defineInRange("bornInChaosDay", 25, 0, 10000);
+        ARRIVALS_MUTANTS_DAY = builder
+          .comment("With Mutationcraft: the day its common mutants, its parasites (miters, necroptors, reductors) and",
+            "the hazmat teams start spawning naturally; any Mutationcraft creature not in a later tier comes with",
+            "them. Mutationcraft's own outbreak timer still applies too (its stages.unlockTimeMultiplier): a tier",
+            "spawns once both allow it. Counted down in chat like bornInChaosDay. 0 holds nothing.")
+          .defineInRange("mutantsDay", 25, 0, 10000);
+        ARRIVALS_ADVANCED_MUTANTS_DAY = builder
+          .comment("With Mutationcraft: the day its advanced tier spawns naturally (the human stages, the assimilated",
+            "enderman and evoker, the carnivorae). 0 holds nothing.")
+          .defineInRange("advancedMutantsDay", 50, 0, 10000);
+        ARRIVALS_ELITE_MUTANTS_DAY = builder
+          .comment("With Mutationcraft: the day its elite tier spawns naturally (the assimilated creeper, the flayer, the",
+            "parasitic ram and roller, the light and medium hooks). 0 holds nothing.")
+          .defineInRange("eliteMutantsDay", 100, 0, 10000);
+        ARRIVALS_BOSS_MUTANTS_DAY = builder
+          .comment("With Mutationcraft: the day its boss tier spawns naturally (the corrosion queen, the human herder, the",
+            "resenter, the parasitic shooter, the heavy hook). 0 holds nothing.")
+          .defineInRange("bossMutantsDay", 200, 0, 10000);
+        builder.pop();
+
         builder.push("guns");
         GUN_ENCHANTMENTS = builder
           .comment("With 'Timeless & Classics Guns: Zero' (TaCZ) installed: guns take enchantments like any",
@@ -995,6 +1029,16 @@ public final class AutopilotConfig
             "gamerule tweaks. Switched off (or the master off), the world gets its own value back, unless someone",
             "changed the gamerule since; a world that already had fire spread off is never touched.")
           .define("disableFireTick", true);
+        DISABLE_MOB_GRIEFING = builder
+          .comment("Vanilla mob griefing off (the mobGriefing gamerule = false, set at every world start like",
+            "disableFireTick): creepers, ghasts and every modded mob that asks the rule stop breaking blocks,",
+            "endermen stop taking them and mobs stop trampling farmland. MineColonies never asks it, so the",
+            "colonists keep working. With Spore, the creep keeps spreading (its painting never asks the rule)",
+            "and the Proto and the hive tumour still break out of walls (the tumour not inside a colony, see",
+            "spores.creepGuard); every other spore mob's block-breaking stops, its bombs' craters and blast",
+            "infection with it. Switched off (or the master off), the world gets its own value back, unless",
+            "someone changed the gamerule since.")
+          .define("disableMobGriefing", false);
         IGNORE_TOOL_TIER = builder
           .comment("Any tool mines any block: MineColonies refuses to let a worker touch a block whose required",
             "pickaxe tier is above the tool in hand, and the builder then freezes the whole work order (a",

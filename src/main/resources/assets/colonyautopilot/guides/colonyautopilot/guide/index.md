@@ -20,6 +20,7 @@ anything — items, recipes, commands.
 * [Getting Started](getting-started.md) — the founder's satchel and your first days
 * [The Spore Infection](the-infection.md) — how the plague actually works
 * [Bestiary](bestiary.md) — every spreader, mini-boss and calamity, with fight notes
+* [The Mutants](mutants.md) — Mutationcraft: when they come, the sickness, how to fight them
 * [Fighting Back](fighting-back.md) — the colony's defenses and yours
 * [Survival Kit](survival-kit.md) — gas mask, cures, the cold doctrine, the CDU
 * [Cleansing Nukes](cleansing-nukes.md) — the craftable counter-weapons

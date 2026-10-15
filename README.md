@@ -20,7 +20,7 @@ It works on a colony you already have. If you ever want to remove the mod, run `
 
 ## Your first hour
 
-1. **Join the world.** On your first join you get a starter kit: MineColonies' build tool, a **Zone Marker**, and the **Field Guide**, the in-game book that explains everything on this page in detail. The first player to join a world that has no colony yet also gets a **Town Hall** block, once per world.
+1. **Join the world.** On your first join you get a starter kit: MineColonies' build tool, a **Zone Marker**, and, with GuideME installed, the **Field Guide**, the in-game book that explains everything on this page in detail. The first player to join a world that has no colony yet also gets a **Town Hall** block, once per world.
 2. **Place the Town Hall and confirm the founding** in the window that opens. From this moment the colony is on autopilot.
 3. **Watch the village start.** Within a game-minute the first Builder's Hut is placed on flat ground near the hall, its ground levelled and a lamp-lit road laid to its door. The builder gets the materials delivered and starts. A new building follows about every ten game-minutes: a Tavern for recruits, Residences, a Guard Tower, a Farm, a Warehouse, a Courier's Hut, and on through a 69-step plan that ends in a fully grown town.
 4. **Read the chat.** The colony tells you when a building finishes, when the town grows, when the Town Hall goes up a level, and once a day it lists anything that needs a human. `/colonyautopilot status` shows what each colony is doing right now.
@@ -102,7 +102,8 @@ These are detected automatically. None is required.
 - **[Spore Inquisition](https://www.curseforge.com/minecraft/mc-mods/spore-inquisition)** (with Spore). The grace counts down in chat, then the RedNight falls at world spawn and the war begins.
 - **[TaCZ](https://www.curseforge.com/minecraft/mc-mods/tacz-1-21-1)** adds six gun enchantments. With its [MineColonies add-on](https://www.curseforge.com/minecraft/mc-mods/minecolonies-compatibility) too, the colony's ranged guards become gunners with a colony-issued rifle.
 - **[K-Turrets](https://www.curseforge.com/minecraft/mc-mods/k-turrets)** (with Spore). Turrets target the whole horde and take no damage.
-- **[GuideME](https://www.curseforge.com/minecraft/mc-mods/guideme)**, **[Patchouli](https://www.curseforge.com/minecraft/mc-mods/patchouli)** or **[Akashic Tome](https://www.curseforge.com/minecraft/mc-mods/akashic-tome)** turn the Field Guide into a searchable illustrated book and put the other mods' guides in your kit.
+- **[Born in Chaos](https://www.curseforge.com/minecraft/mc-mods/born-in-chaos)** and **[Mutationcraft](https://www.curseforge.com/minecraft/mc-mods/mutationcraft)**. Their monsters arrive on a schedule the chat counts down: Born in Chaos and the first mutants on day 25, advanced mutants on day 50, elite mutants on day 100, the mutant bosses on day 200. Until then they do not spawn naturally.
+- **[GuideME](https://www.curseforge.com/minecraft/mc-mods/guideme)**, **[Patchouli](https://www.curseforge.com/minecraft/mc-mods/patchouli)** or **[Akashic Tome](https://www.curseforge.com/minecraft/mc-mods/akashic-tome)** give you the Field Guide, a searchable illustrated book (GuideME; Applied Energistics 2 brings it along), and put the other mods' guides in your kit.
 
 ## Style packs
 

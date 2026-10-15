@@ -273,17 +273,26 @@ final class SporeCompat
 
     private static final Set<String> CREEP_PAINTERS = Set.of("mound", "gastgaber", "proto", "hivetumor");
 
+    private static final Set<String> GRIEF_DESPITE_RULE = Set.of("proto", "hivetumor");
+
     @net.neoforged.bus.api.SubscribeEvent
     public void onSporeGriefing(final net.neoforged.neoforge.event.entity.EntityMobGriefingEvent event)
     {
         if (!AutopilotConfig.masterOn()
-              || !event.canGrief()
               || !isSporeEntity(event.getEntity())
               || !(event.getEntity().level() instanceof ServerLevel level))
         {
             return;
         }
         final ResourceLocation id = BuiltInRegistries.ENTITY_TYPE.getKey(event.getEntity().getType());
+        if (!event.canGrief())
+        {
+            if (!AutopilotConfig.live(AutopilotConfig.DISABLE_MOB_GRIEFING) || !GRIEF_DESPITE_RULE.contains(id.getPath()))
+            {
+                return;
+            }
+            event.setCanGrief(true);
+        }
         if (AutopilotConfig.SPORE_DEMOLITION_RIGHTS.get().contains(id.toString()))
         {
             return;

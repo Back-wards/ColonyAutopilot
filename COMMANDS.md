@@ -23,7 +23,7 @@ follows the commands.
 | `/colonyautopilot colony [<id>] treasury add <n>` | **op** — Put n ColonyBucks in one colony's treasury, for testing or relief after a loss |
 | `/colonyautopilot exchange` | Trade diamonds, gold, ancient debris and netherite for ColonyBucks on the ordinary trading screen, in the colony you stand in (also: **Trade** on the town hall's **Exchange** tab). Anyone with access to the colony's huts may trade, while the colony is in Progression Mode |
 | `/colonyautopilot zone wand` / `list` / `clear` | A Zone Marker / this colony's protected zones / **op** — wipe them |
-| `/colonyautopilot guide` | Another copy of the field guide |
+| `/colonyautopilot guide` | Another copy of the field guide (needs the GuideME mod) |
 | `/colonyautopilot chat off` / `on` | Mute / restore colony chatter — for you only (the alert horn, the one-time Progression Mode notice and the rednight countdown still come through) |
 
 ## `/colonyautopilot status`

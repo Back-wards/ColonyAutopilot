@@ -36,7 +36,8 @@ public class AutopilotCommands
     private final GolemKeeper golems;
 
     private static final Set<String> WORLD_TWEAK_KEYS = Set.of(
-      "tweaks.workersWorkInRain", "tweaks.disableVanillaPatrols", "tweaks.disableFireTick", "tweaks.spawnChunkRadius");
+      "tweaks.workersWorkInRain", "tweaks.disableVanillaPatrols", "tweaks.disableFireTick", "tweaks.disableMobGriefing",
+      "tweaks.spawnChunkRadius");
 
     public AutopilotCommands(final GrowthDirector growth, final GolemKeeper golems)
     {
@@ -1012,16 +1013,17 @@ public class AutopilotCommands
             source.sendFailure(Component.literal("Only a player can be given the field guide."));
             return 0;
         }
-        ItemStack stack = GuideMeCompat.guideStack();
+        final ItemStack stack = GuideMeCompat.guideStack();
         if (stack.isEmpty())
         {
-            stack = FieldGuide.book();
+            source.sendFailure(Component.literal("The field guide needs the GuideME mod (Applied Energistics 2 brings it along)."));
+            return 0;
         }
         if (!player.getInventory().add(stack))
         {
             player.drop(stack, false);
         }
-        source.sendSuccess(() -> Component.literal("Here is the Colony Autopilot field guide — the pack's Spore recipes and commands."), false);
+        source.sendSuccess(() -> Component.literal("Here is the Colony Autopilot field guide."), false);
         return 1;
     }
 

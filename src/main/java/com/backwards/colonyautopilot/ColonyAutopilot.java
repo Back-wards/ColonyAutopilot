@@ -127,6 +127,7 @@ public class ColonyAutopilot
         NeoForge.EVENT_BUS.register(new SpawnKit());
         final SporeCompat sporeCompat = new SporeCompat();
         NeoForge.EVENT_BUS.register(sporeCompat);
+        NeoForge.EVENT_BUS.register(new Arrivals());
 
         modBus.addListener((final FMLCommonSetupEvent event) -> event.enqueueWork(() -> {
             director.subscribeToMineColonies();
@@ -323,6 +324,12 @@ public class ColonyAutopilot
           "Disabled fire spread (doFireTick=false, tweaks.disableFireTick) — fire can't spread through the colony");
     }
 
+    private static void applyMobGriefingTweak(final MinecraftServer server)
+    {
+        ownRule(server, GameRules.RULE_MOBGRIEFING, AutopilotConfig.live(AutopilotConfig.DISABLE_MOB_GRIEFING), 0,
+          "Disabled mob griefing (mobGriefing=false, tweaks.disableMobGriefing) — creepers and modded mobs break no blocks");
+    }
+
     private static void applySpawnRadiusTweak(final MinecraftServer server)
     {
         final int wanted = AutopilotConfig.SPAWN_CHUNK_RADIUS.get();
@@ -335,6 +342,7 @@ public class ColonyAutopilot
         applyRainTweak();
         applyPatrolTweak(server);
         applyFireTweak(server);
+        applyMobGriefingTweak(server);
         applySpawnRadiusTweak(server);
     }
 

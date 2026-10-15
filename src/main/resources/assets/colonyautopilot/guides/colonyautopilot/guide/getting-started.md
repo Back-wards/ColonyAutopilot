@@ -35,6 +35,11 @@ On your first join of a world you receive the **founder's satchel**:
    races toward population 25 — its survival bar for the war — and its combat
    research on its own, so spend the time gearing yourself (gas mask, cold,
    guns) and scouting.
+5. **The other monsters keep a calendar too.** With Born in Chaos and
+   Mutationcraft installed, their monsters do not spawn naturally until their
+   day comes: Born in Chaos and the first mutants on **day 25**, advanced
+   mutants on **day 50**, elite mutants on **day 100**, the mutant bosses on
+   **day 200**. The chat counts each one down for its last 25 days.
 
 ## While you wait
 

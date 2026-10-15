@@ -49,15 +49,25 @@ public final class ColonySettings
     private static Set<String> requiresOf(final String path)
     {
         final Set<String> named = REQUIRES.get(path);
-        return named != null ? named : path.startsWith("spores.") ? Set.of(SporeCompat.MOD_ID) : Set.of();
+        if (named != null)
+        {
+            return named;
+        }
+        if (path.startsWith("arrivals."))
+        {
+            return Set.of("arrivals.bornInChaosDay".equals(path) ? Arrivals.BORN_IN_CHAOS : Arrivals.MUTATIONCRAFT);
+        }
+        return path.startsWith("spores.") ? Set.of(SporeCompat.MOD_ID) : Set.of();
     }
 
     private static final Set<String> SERVER_ONLY = Set.of(
       "master.enabled", "meta.configVersion",
-      "tweaks.workersWorkInRain", "tweaks.disableVanillaPatrols", "tweaks.disableFireTick", "tweaks.spawnChunkRadius",
-      "tweaks.hostileSpawnCap", "tweaks.potionDurationMultiplier", "tweaks.ignoreToolTier", "tweaks.ignoreFoodQuality",
+      "tweaks.workersWorkInRain", "tweaks.disableVanillaPatrols", "tweaks.disableFireTick", "tweaks.disableMobGriefing",
+      "tweaks.spawnChunkRadius", "tweaks.hostileSpawnCap", "tweaks.potionDurationMultiplier", "tweaks.ignoreToolTier", "tweaks.ignoreFoodQuality",
       "tweaks.spawnStarterKit", "tweaks.muteFarmersDelightRecipeErrors", "tweaks.workBudgetPerTick",
       "guns.enchantments", "guns.fullAutoGunners", "spores.gracePeriodDays", "spores.turretsTargetInfected", "spores.turretsInvulnerable",
+      "arrivals.bornInChaosDay", "arrivals.mutantsDay", "arrivals.advancedMutantsDay", "arrivals.eliteMutantsDay",
+      "arrivals.bossMutantsDay",
 
       "autoupgrade.checkIntervalSeconds", "problems.enabled", "milestones.problemChat", "zones.maxPerColony", "growth.frontierTickets",
 
