@@ -13,8 +13,10 @@ fact below is taken from the mod's code.
 
 ## When they come
 
-Nothing from Mutationcraft spawns naturally until its day. The chat counts each
-arrival down for its last 25 days, like the RedNight:
+Nothing from Mutationcraft spawns naturally until its day. The days below are
+the defaults; your server's arrivals settings may differ. The chat counts the
+first arrival down for its last 25 days, like the RedNight; the later tiers
+come without a warning:
 
 * **Day 25 — the common mutants**: assimilated villagers, pillagers, pigs, cows,
   sheep, horses, donkeys, wolves, foxes, bears, spiders, witches, piglins,
@@ -27,7 +29,8 @@ arrival down for its last 25 days, like the RedNight:
 * **Day 200 — bosses**: the corrosion queen, the human herder, the resenter, the
   parasitic shooter, the heavy hook.
 
-Born in Chaos keeps the same first date: its creatures arrive on **day 25**.
+Born in Chaos keeps the same first date by default: its creatures arrive on
+**day 25**.
 
 ## Mutagen Sickness — the real threat
 
@@ -52,7 +55,15 @@ Born in Chaos keeps the same first date: its creatures arrive on **day 25**.
   Assimilated Human that kills five skeletons becomes a **Flayer**.
 * **Hooks** take root and summon miters and necroptors; light hooks grow into
   medium (five minutes) and heavy ones (ten more). A dying necroptor sometimes
-  leaves a light hook behind. In this pack hooks leave no putrid ground.
+  leaves a light hook behind, but not where four hooks already stand, and a
+  hook with two dozen mutants around it waits until some of them fall (the
+  defaults): a nest is a siege, not an endless one. In this pack hooks leave no
+  putrid ground.
+* Before a tier's day nothing grows or turns into it, and the hooks and parasites
+  Mutationcraft spawns by itself do not bring it (before the common mutants' day,
+  a mutant you summon yourself can still leave its parasites). A hook waits as it
+  is, though one in a cramped spot may shift once. A would-be Flayer whose fifth
+  skeleton falls before the elite day loses its count and must start again.
 
 ## Know these
 
@@ -64,7 +75,8 @@ Born in Chaos keeps the same first date: its creatures arrive on **day 25**.
 * **Corrosion Queen** — her blows bring **Corrosion** (your armour slowly melts);
   her spells slow you and raise poisoned and blood spikes around you.
 * **The Intoxicator** — a boss. It sleeps inside a **Rotten Skeleton**, a still,
-  rotting figure: right-click one and it wakes. Bring friends.
+  rotting figure: right-click one and it wakes. It belongs to no tier, so it can be
+  woken from the common mutants' day, once rotten skeletons are about. Bring friends.
 
 ## Fighting back
 

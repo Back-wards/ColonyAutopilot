@@ -94,7 +94,7 @@ public final class AutopilotWindow extends AbstractWindowSkeleton
             }
         }
 
-        final ButtonImage ribbon = findPaneOfTypeByID(BUTTON_SETTINGS + "1", ButtonImage.class);
+        final ButtonImage ribbon = findPaneOfTypeByID(townHall != null ? "exchange1" : BUTTON_SETTINGS + "1", ButtonImage.class);
         ribbon.setText(Component.translatable("colonyautopilot.gui.title"));
         ribbon.show();
 
@@ -236,7 +236,10 @@ public final class AutopilotWindow extends AbstractWindowSkeleton
         {
             section = sections.get(0);
         }
-        status.setText(Component.translatable(fresh.canEdit() ? "colonyautopilot.gui.editable" : "colonyautopilot.gui.readonly", colonyName));
+
+        final boolean everyRow = fresh.rows().stream().anyMatch(row -> row.serverWide() && row.editable());
+        status.setText(Component.translatable(!fresh.canEdit() ? "colonyautopilot.gui.readonly"
+          : everyRow ? "colonyautopilot.gui.editable.all" : "colonyautopilot.gui.editable", colonyName));
         rebuildShown();
     }
 
@@ -259,10 +262,11 @@ public final class AutopilotWindow extends AbstractWindowSkeleton
     private void drawRow(final Row row, final Pane rowPane)
     {
         final boolean fresh = !row.path().equals(paneKeys.put(rowPane, row.path()));
-        final boolean editable = snapshot.canEdit() && !row.serverWide();
+
+        final boolean editable = row.editable();
         final Text name = rowPane.findPaneOfTypeByID("name", Text.class);
         final MutableComponent label = Component.translatableWithFallback("colonyautopilot.gui.key." + row.path(), humanise(row.path().substring(section.length() + 1)));
-        name.setText(row.serverWide() ? label.withStyle(ChatFormatting.DARK_GRAY) : row.overridden() ? label.withStyle(ChatFormatting.DARK_BLUE) : label);
+        name.setText(row.serverWide() && !editable ? label.withStyle(ChatFormatting.DARK_GRAY) : row.overridden() ? label.withStyle(ChatFormatting.DARK_BLUE) : label);
 
         final ButtonImage toggle = rowPane.findPaneOfTypeByID("toggle", ButtonImage.class);
         final TextField field = rowPane.findPaneOfTypeByID("field", TextField.class);
@@ -292,10 +296,18 @@ public final class AutopilotWindow extends AbstractWindowSkeleton
         final boolean resettable = editable && row.overridden();
         rowPane.findPaneOfTypeByID("reset", ButtonImage.class).setVisible(resettable);
 
-        final Text info = rowPane.findPaneOfTypeByID("info", Text.class);
-        info.setVisible(!resettable);
-        info.setText(row.serverWide()
-          ? Component.translatable("colonyautopilot.gui.server") : row.overridden() && !resettable ? Component.translatable("colonyautopilot.gui.own") : Component.empty());
+        final MutableComponent scope = row.serverWide()
+          ? Component.translatable("colonyautopilot.gui.server").withStyle(ChatFormatting.DARK_AQUA)
+          : Component.translatable("colonyautopilot.gui.colony").withStyle(ChatFormatting.DARK_GREEN);
+        if (row.serverWide() && row.path().equals("economy.progressionMode"))
+        {
+            scope.append(Component.literal(" · ").append(Component.translatable("colonyautopilot.gui.locked")).withStyle(ChatFormatting.DARK_GRAY));
+        }
+        else if (row.overridden() && !resettable)
+        {
+            scope.append(Component.literal(" · ").append(Component.translatable("colonyautopilot.gui.own")).withStyle(ChatFormatting.DARK_BLUE));
+        }
+        rowPane.findPaneOfTypeByID("info", Text.class).setText(scope);
 
         final Tooltip tip = tooltips.computeIfAbsent(rowPane, pane -> PaneBuilders.tooltipBuilder().hoverPane(pane.findPaneByID("name")).build());
 
@@ -317,11 +329,16 @@ public final class AutopilotWindow extends AbstractWindowSkeleton
             {
 
                 lines.add(Component.translatable(row.path().equals("economy.progressionMode") ? "colonyautopilot.gui.tip.locked"
+                                                   : row.path().equals("master.enabled") ? "colonyautopilot.gui.tip.master"
                                                    : "colonyautopilot.gui.tip.server").withStyle(ChatFormatting.DARK_GRAY));
             }
-            else if (row.overridden())
+            else
             {
-                lines.add(Component.translatable("colonyautopilot.gui.tip.own").withStyle(ChatFormatting.DARK_BLUE));
+                lines.add(Component.translatable("colonyautopilot.gui.tip.colony").withStyle(ChatFormatting.DARK_GREEN));
+                if (row.overridden())
+                {
+                    lines.add(Component.translatable("colonyautopilot.gui.tip.own").withStyle(ChatFormatting.DARK_BLUE));
+                }
             }
             tip.setText(lines);
         }

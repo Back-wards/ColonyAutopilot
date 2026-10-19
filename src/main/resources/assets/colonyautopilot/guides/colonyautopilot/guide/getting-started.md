@@ -22,8 +22,10 @@ On your first join of a world you receive the **founder's satchel**:
 ## Your first days
 
 1. **Place the Town Hall.** The autopilot places, builds and upgrades every other
-   building on its own, following a growth plan — builders' huts, tavern, warehouse,
-   farms, guard towers, university, barracks and the rest.
+   building on its own, following a growth plan — three builders' huts first, then
+   tavern, warehouse, blacksmith, farms, guard towers, university, barracks and the rest.
+   (That is the order of a new growth-plan file; one an older version wrote keeps its
+   own order.)
 2. **Don't fight the machine.** Citizens are hired, fed, healed, equipped and
    researched automatically. Materials for construction trickle in on their own.
 3. **Mark your ground.** If you build a base near the colony, surround it with
@@ -36,9 +38,11 @@ On your first join of a world you receive the **founder's satchel**:
    guns) and scouting.
 5. **The other monsters keep a calendar too.** With Born in Chaos and
    Mutationcraft installed, their monsters do not spawn naturally until their
-   day comes: Born in Chaos and the first mutants on **day 25**, advanced
-   mutants on **day 50**, elite mutants on **day 100**, the mutant bosses on
-   **day 200**. The chat counts each one down for its last 25 days.
+   day comes. By default that is **day 25** for Born in Chaos and the first
+   mutants, **day 50** for advanced mutants, **day 100** for elite mutants and
+   **day 200** for the mutant bosses; your server's arrivals settings may
+   differ. The chat counts down the first arrival for its last 25 days; the
+   later mutants come without a warning.
 
 ## While you wait
 

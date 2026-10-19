@@ -9,9 +9,12 @@ import com.minecolonies.api.colony.buildings.IBuilding;
 import com.minecolonies.api.inventory.InventoryCitizen;
 import com.minecolonies.api.util.InventoryUtils;
 import com.minecolonies.api.util.ItemStackUtils;
+import com.minecolonies.core.colony.buildings.AbstractBuildingStructureBuilder;
+import com.minecolonies.core.colony.buildings.utils.BuildingBuilderResource;
 import com.minecolonies.core.colony.jobs.AbstractJobGuard;
 import com.minecolonies.core.colony.jobs.JobBlacksmith;
 import com.minecolonies.core.colony.jobs.JobDeliveryman;
+import com.minecolonies.core.colony.jobs.JobUndertaker;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.EquipmentSlot;
@@ -35,7 +38,7 @@ import java.util.Set;
 
 public class Quartermaster
 {
-    private static final int PERIOD_TICKS = 1200;
+    private static final int PERIOD_TICKS = 200;
 
     private static final Map<Class<?>, Item[]> TOOLS = Map.of(
       PickaxeItem.class, new Item[] {Items.STONE_PICKAXE, Items.IRON_PICKAXE, Items.DIAMOND_PICKAXE},
@@ -70,7 +73,7 @@ public class Quartermaster
             }
             try
             {
-                outfitOneCitizen(colony);
+                outfitColony(colony);
             }
             catch (final Exception e)
             {
@@ -93,7 +96,7 @@ public class Quartermaster
         return smithy == 0 ? 0 : smithy >= 5 && hall != null && hall.getBuildingLevel() >= 5 ? 2 : 1;
     }
 
-    private void outfitOneCitizen(final IColony colony)
+    private void outfitColony(final IColony colony)
     {
         if (!(colony.getWorld() instanceof ServerLevel level))
         {
@@ -104,30 +107,42 @@ public class Quartermaster
 
         final int colonyArmorTier = smithTier == 0 ? 1 : smithTier + 2;
 
-        final boolean metered = AutopilotConfig.progressionMode(colony);
         for (final ICitizenData citizen : colony.getCitizenManager().getCitizens())
         {
 
-            if (citizen.getWorkBuilding() == null
-                  || (metered && (citizen.getJob() instanceof JobDeliveryman || citizen.getJob() instanceof JobBlacksmith)))
+            if (citizen.getWorkBuilding() == null || citizen.getJob() instanceof JobDeliveryman || citizen.getJob() instanceof JobBlacksmith
+                  || citizen.getJob() instanceof JobUndertaker)
             {
                 continue;
             }
 
-            if ((AutopilotConfig.get(colony, AutopilotConfig.PROVIDENCE_TOOLS) && upgradeTools(colony, level, citizen, colonyToolTier))
-                  || (AutopilotConfig.get(colony, AutopilotConfig.PROVIDENCE_ARMOUR_WEAPONS) && upgradeArmor(colony, level, citizen, colonyArmorTier)))
+            if (AutopilotConfig.get(colony, AutopilotConfig.PROVIDENCE_TOOLS))
             {
-                return;
+
+                final Set<Item> materials = new HashSet<>();
+                if (citizen.getWorkBuilding() instanceof AbstractBuildingStructureBuilder builder)
+                {
+                    for (final BuildingBuilderResource resource : builder.getNeededResources().values())
+                    {
+                        materials.add(resource.getItemStack().getItem());
+                    }
+                }
+                upgradeTools(colony, level, citizen, colonyToolTier, materials);
+            }
+            if (AutopilotConfig.get(colony, AutopilotConfig.PROVIDENCE_ARMOUR_WEAPONS))
+            {
+                upgradeArmor(colony, level, citizen, colonyArmorTier);
             }
         }
     }
 
-    private static boolean upgradeTools(final IColony colony, final ServerLevel level, final ICitizenData citizen, final int colonyToolTier)
+    private static void upgradeTools(final IColony colony, final ServerLevel level, final ICitizenData citizen, final int colonyToolTier,
+                                     final Set<Item> materials)
     {
         final int cap = Math.min(citizen.getWorkBuilding().getMaxEquipmentLevel(), colonyToolTier);
         if (cap < 1)
         {
-            return false;
+            return;
         }
         final InventoryCitizen pockets = citizen.getInventory();
 
@@ -144,47 +159,46 @@ public class Quartermaster
         {
             final ItemStack held = pockets.getStackInSlot(slot);
             final int heldTier = toolTier(held);
-            final Item[] ladder = held.isEmpty() ? null : TOOLS.get(held.getItem().getClass());
-            if (ladder == null || heldTier < 0 || heldTier >= cap || kindsAtCap.contains(held.getItem().getClass()))
+            final Class<?> kind = held.getItem().getClass();
+            final Item[] ladder = held.isEmpty() ? null : TOOLS.get(kind);
+            if (ladder == null || heldTier < 0 || heldTier >= cap || kindsAtCap.contains(kind) || materials.contains(held.getItem()))
             {
-                continue;
-            }
-            if (held.isEnchanted())
-            {
-
                 continue;
             }
             final ItemStack upgrade = new ItemStack(ladder[cap - 1]);
 
             if (Treasury.isCurrency(upgrade) || !Treasury.canAfford(colony, level, Treasury.cost(upgrade)))
             {
-                return false;
+                return;
             }
             if (!InventoryUtils.addItemStackToItemHandler(pockets, upgrade.copy()))
             {
-                return false;
+                return;
             }
 
             Treasury.charge(colony, level, Treasury.cost(upgrade), citizen.getJob() instanceof AbstractJobGuard ? Treasury.Line.GEAR : Treasury.Line.TOOLS);
             final ItemStack retired = pockets.extractItem(slot, held.getCount(), false);
             ColonyAutopilot.LOGGER.debug("[{}] the quartermaster upgraded {}'s {} to {}",
               colony.getName(), citizen.getName(), retired.getHoverName().getString(), upgrade.getHoverName().getString());
-            return true;
+
+            if (AutopilotConfig.progressionMode(colony))
+            {
+                kindsAtCap.add(kind);
+            }
         }
-        return false;
     }
 
-    private static boolean upgradeArmor(final IColony colony, final ServerLevel level, final ICitizenData citizen, final int colonyArmorTier)
+    private static void upgradeArmor(final IColony colony, final ServerLevel level, final ICitizenData citizen, final int colonyArmorTier)
     {
         if (!(citizen.getJob() instanceof AbstractJobGuard))
         {
-            return false;
+            return;
         }
 
         final int cap = Math.min(Math.min(citizen.getWorkBuilding().getBuildingLevelEquivalent(), 4), colonyArmorTier);
         if (cap < 1)
         {
-            return false;
+            return;
         }
         final InventoryCitizen inventory = citizen.getInventory();
         for (final Map.Entry<EquipmentSlot, Item[]> entry : ARMOR.entrySet())
@@ -195,7 +209,7 @@ public class Quartermaster
                 continue;
             }
 
-            if (!(worn.getItem() instanceof ArmorItem) || worn.isEnchanted()
+            if (!(worn.getItem() instanceof ArmorItem)
                   || !BuiltInRegistries.ITEM.getKey(worn.getItem()).getNamespace().equals("minecraft"))
             {
                 continue;
@@ -209,15 +223,12 @@ public class Quartermaster
 
             if (Treasury.isCurrency(upgrade) || !Treasury.charge(colony, level, Treasury.cost(upgrade), Treasury.Line.GEAR))
             {
-                return false;
+                return;
             }
             inventory.forceArmorStackToSlot(entry.getKey(), upgrade);
             ColonyAutopilot.LOGGER.debug("[{}] the quartermaster re-armored {}: {} replaces {}",
               colony.getName(), citizen.getName(), upgrade.getHoverName().getString(), worn.getHoverName().getString());
-            return true;
         }
-
-        return false;
     }
 
     private static int toolTier(final ItemStack stack)

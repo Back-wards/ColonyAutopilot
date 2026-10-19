@@ -23,10 +23,13 @@
     "ResearchCostRequestMixin",
     "RestaurantMenuMixin",
     "GuardTargetMixin",
-    "ThreatTableMixin"
+    "ThreatTableMixin",
+    "MutantConversionMixin",
+    "AberrationSpawnsMixin",
+    "NecroptorBehaviorMixin",
+    "HookBehaviorMixin"
   ],
   "client": [
-    "client.WindowSettingsMixin",
     "client.AbstractWindowTownHallMixin"
   ],
   "injectors": {

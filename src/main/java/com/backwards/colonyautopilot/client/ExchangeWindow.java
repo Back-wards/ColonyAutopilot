@@ -58,6 +58,7 @@ public final class ExchangeWindow extends AbstractWindowTownHall
     private final ButtonImage roads;
 
     private final Tooltip roadsTip;
+    private final ButtonImage settings;
     private final ScrollingList summaryList;
     private final List<Component> summaryRows = new ArrayList<>();
     private final ScrollingList ledgerList;
@@ -79,6 +80,8 @@ public final class ExchangeWindow extends AbstractWindowTownHall
 
         registerButton("relayroads", () -> PacketDistributor.sendToServer(new RelayRoads(colony)));
         roadsTip = PaneBuilders.tooltipBuilder().hoverPane(roads).build();
+        settings = findPaneOfTypeByID("autopilotsettings", ButtonImage.class);
+        registerButton("autopilotsettings", () -> new AutopilotWindow(colonyView, townHall).open());
         addLine(summaryRows, Component.translatable("colonyautopilot.gui.exchange.loading"));
         summaryList = findPaneOfTypeByID("summary", ScrollingList.class);
         summaryList.setDataProvider(provider(summaryRows));
@@ -162,6 +165,7 @@ public final class ExchangeWindow extends AbstractWindowTownHall
 
         roads.setVisible(seen);
         roads.setEnabled(fresh.roads().isEmpty());
+        settings.setVisible(seen);
         roadsTip.setText(fresh.roads().isEmpty() ? Component.translatable("colonyautopilot.gui.roads.tip") : Component.literal(fresh.roads()));
         if (seen)
         {

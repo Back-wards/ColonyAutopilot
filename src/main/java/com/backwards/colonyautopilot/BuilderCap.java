@@ -27,6 +27,8 @@ public final class BuilderCap
 
     private static UpgradeDirector upgrades;
 
+    private static int openingBuilderHuts = 1;
+
     static final Map<ColonyId, Long> placementWantedAt = new HashMap<>();
 
     static final Map<ColonyId, Long> placementAdmittedAt = new HashMap<>();
@@ -39,6 +41,11 @@ public final class BuilderCap
     static void setUpgradeDirector(final UpgradeDirector director)
     {
         upgrades = director;
+    }
+
+    static void setOpeningBuilderHuts(final int count)
+    {
+        openingBuilderHuts = Math.max(1, count);
     }
 
     static void clear()
@@ -109,7 +116,7 @@ public final class BuilderCap
         placementWantedAt.put(key, now);
         final Load load = load(colony);
 
-        if (hut != ModBlocks.blockHutBuilder || load.builderHuts() > 0)
+        if (hut != ModBlocks.blockHutBuilder || load.builderHuts() >= openingBuilderHuts)
         {
             if (load.jobs() >= load.cap())
             {

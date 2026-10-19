@@ -55,6 +55,7 @@ public final class AutopilotConfig
     public static final ModConfigSpec.IntValue KNIGHTS_PER_ARCHER;
     public static final ModConfigSpec.BooleanValue RESEARCH_FREE_BUILD_SPEED;
     public static final ModConfigSpec.BooleanValue RESEARCH_FREE_BARRACKS;
+    public static final ModConfigSpec.BooleanValue RESEARCH_FREE_BLACKSMITH;
     public static final ModConfigSpec.BooleanValue RESEARCH_FREE_POPULATION;
     public static final ModConfigSpec.BooleanValue RESEARCH_FREE_DRUID;
     public static final ModConfigSpec.BooleanValue RECRUIT_VISITORS;
@@ -92,7 +93,7 @@ public final class AutopilotConfig
     public static final ModConfigSpec.IntValue SPORES_FESTER_TICKS;
     public static final ModConfigSpec.IntValue CONFIG_VERSION;
 
-    private static final int CURRENT_CONFIG_VERSION = 3;
+    private static final int CURRENT_CONFIG_VERSION = 4;
     public static final ModConfigSpec.BooleanValue SPORES_TURRETS_TARGET_INFECTED;
     public static final ModConfigSpec.BooleanValue SPORES_TURRETS_INVULNERABLE;
     public static final ModConfigSpec.IntValue SPORES_GRACE_DAYS;
@@ -102,6 +103,8 @@ public final class AutopilotConfig
     public static final ModConfigSpec.IntValue ARRIVALS_ADVANCED_MUTANTS_DAY;
     public static final ModConfigSpec.IntValue ARRIVALS_ELITE_MUTANTS_DAY;
     public static final ModConfigSpec.IntValue ARRIVALS_BOSS_MUTANTS_DAY;
+    public static final ModConfigSpec.IntValue ARRIVALS_HOOK_LIMIT;
+    public static final ModConfigSpec.IntValue ARRIVALS_HOOK_CROWD_LIMIT;
     public static final ModConfigSpec.BooleanValue GUN_ENCHANTMENTS;
     public static final ModConfigSpec.BooleanValue FULL_AUTO_GUNNERS;
     public static final ModConfigSpec.BooleanValue GUNNER_GUARDS;
@@ -214,8 +217,9 @@ public final class AutopilotConfig
         ECONOMY_JOBS_PER_BUILDER = builder
           .comment("Progression Mode only: construction jobs in flight (huts placed but not built, upgrades under",
             "way; repairs, removals and decorations not counted) allowed per built builder's hut. Without a cap a",
-            "starved colony turns into a field of empty construction sites nobody can pay to finish. The first",
-            "builder's hut may always be placed, and the plan is held, never skipped.")
+            "starved colony turns into a field of empty construction sites nobody can pay to finish. The plan's",
+            "opening Builder's Huts (its first Builder's Hut step, 3 by default) may always be placed, and the plan",
+            "is held, never skipped.")
           .defineInRange("jobsPerBuilder", 1, 1, 16);
         ECONOMY_UPGRADES_PER_PLACEMENT = builder
           .comment("Progression Mode only, town hall level 3 and up: upgrades started between two new placements",
@@ -256,17 +260,17 @@ public final class AutopilotConfig
             "dungeons, temples, strongholds, trial chambers, the spawn bonus chest, modded structures alike - gets",
             "one stack of chestMin to chestMax. Mineshaft chests use mineshaftMin/Max, village chests hold none.",
             "A roll made as any entity but a player (a datapack's scripted loot, such as Spore Inquisition's",
-            "offerings) pays none.")
-          .defineInRange("chestMin", 6, 0, 64);
+            "offerings) pays none. A roll of 0 adds nothing.")
+          .defineInRange("chestMin", 1, 0, 64);
         ECONOMY_CHEST_MAX = builder
           .comment("The most ColonyBucks one loot chest holds (see chestMin). A chestMin above this gives chestMin.")
-          .defineInRange("chestMax", 15, 0, 64);
+          .defineInRange("chestMax", 4, 0, 64);
         ECONOMY_MINESHAFT_MIN = builder
           .comment("The fewest ColonyBucks in a mineshaft chest: mineshafts are full of chests, so each one pays less.")
-          .defineInRange("mineshaftMin", 2, 0, 64);
+          .defineInRange("mineshaftMin", 0, 0, 64);
         ECONOMY_MINESHAFT_MAX = builder
           .comment("The most ColonyBucks in a mineshaft chest. A mineshaftMin above this gives mineshaftMin.")
-          .defineInRange("mineshaftMax", 5, 0, 64);
+          .defineInRange("mineshaftMax", 2, 0, 64);
         ECONOMY_EXCHANGE = builder
           .comment("The Exchange: the Trade button on the town hall's Exchange tab and '/colonyautopilot exchange' open a",
             "trading screen that sells ColonyBucks for valuables (economy.offers). One way only: bucks never buy",
@@ -591,6 +595,14 @@ public final class AutopilotConfig
             "is completed FREE the moment a colony first evaluates, so the guard barracks — the colony's",
             "defensive backbone — can be built without waiting for the university to research it.")
           .define("freeBarracks", true);
+        RESEARCH_FREE_BLACKSMITH = builder
+          .comment("The blacksmith is pre-unlocked: its unlock research (Hitting Iron, which wants a level-3 mine)",
+            "and every prerequisite is completed FREE the moment a colony first evaluates, so the village can",
+            "build its blacksmith early and its guards reach iron gear without waiting on the mine and the",
+            "university (see Quartermaster: any blacksmith lifts the colony's armour to iron). research.freeBuildSpeed",
+            "grants Hitting Iron too, as the root of MineColonies' build-speed line: switching this off locks the",
+            "blacksmith only while freeBuildSpeed is off as well.")
+          .define("freeBlacksmith", true);
         RESEARCH_FREE_POPULATION = builder
           .comment("The population-cap research is pre-unlocked: the whole CITIZEN_CAP chain (which raises",
             "max citizens past the default 25) is completed FREE at colony birth, so the village grows",
@@ -751,13 +763,14 @@ public final class AutopilotConfig
             "the level the enchanter himself would need to craft them.")
           .define("enchanterScrolls", true);
         QUARTERMASTER = builder
-          .comment("Keep every worker's kit as good as the village can make it: one citizen per colony per round",
-            "gets their strictly-worse tool or armor replaced with the best the workplace and the colony's",
-            "crafters allow; the old piece is retired. Off: workers keep what they were issued. In Progression",
-            "Mode each upgrade is paid from the treasury, couriers and the blacksmith are passed over, and a",
-            "worker who already holds a tool of a kind at the best level gets no second one. Vanilla never",
-            "upgrades working gear, so a stone pickaxe survives into the diamond age and guards keep their first",
-            "armor forever; in the mode a courier's tools are goods in transit and the smith's are what he forges.")
+          .comment("Keep every worker's kit as good as the village can make it: every 200 ticks (ten seconds at the normal",
+            "tick rate) each citizen gets every strictly-worse tool, and a guard every strictly-worse armor piece,",
+            "replaced with the best the workplace and the colony's crafters allow, at once. The old piece is deleted,",
+            "enchanted or not. Off: workers keep what they were issued. Couriers, the blacksmith and the undertaker",
+            "are passed over (their tools are goods in transit, what the smith forges, a grave's contents), and so are",
+            "the tools a builder carries as a blueprint's materials. In Progression Mode each upgrade is paid from the treasury, and a worker who already",
+            "holds a tool of a kind at the best level gets no second one. Vanilla never upgrades working gear, so a",
+            "stone pickaxe survives into the diamond age and guards keep their first armor forever.")
           .define("quartermaster", true);
         builder.pop();
 
@@ -858,7 +871,7 @@ public final class AutopilotConfig
             "apocalypse (a day-1 rednight mauls a young village). Every 5 days the chat counts it down",
             "for everyone online — 'Days before rednight - 50 Days' — until it falls; the server's",
             "milestones.enabled=false silences the countdown, and a player's '/colonyautopilot chat off' does",
-            "not (the war's warning, like the alert horn). Set 1 to TEST the rednight on",
+            "not (the war's warning). Set 1 to TEST the rednight on",
             "the first night. IMPORTANT — 0 disables the grace AND the rednight: at 0 this addon steps",
             "aside for SI's own natural drop, which does not fire in this pack, so 0 means NO rednight",
             "at all. Keep 1+ to get the rednight. Set this at world CREATION (a world whose rednight",
@@ -911,16 +924,28 @@ public final class AutopilotConfig
           .defineInRange("mutantsDay", 25, 0, 10000);
         ARRIVALS_ADVANCED_MUTANTS_DAY = builder
           .comment("With Mutationcraft: the day its advanced tier spawns naturally (the human stages, the assimilated",
-            "enderman and evoker, the carnivorae). 0 holds nothing.")
+            "enderman and evoker, the carnivorae). Unannounced in chat. 0 holds nothing.")
           .defineInRange("advancedMutantsDay", 50, 0, 10000);
         ARRIVALS_ELITE_MUTANTS_DAY = builder
           .comment("With Mutationcraft: the day its elite tier spawns naturally (the assimilated creeper, the flayer, the",
-            "parasitic ram and roller, the light and medium hooks). 0 holds nothing.")
+            "parasitic ram and roller, the light and medium hooks). Unannounced in chat. 0 holds nothing.")
           .defineInRange("eliteMutantsDay", 100, 0, 10000);
         ARRIVALS_BOSS_MUTANTS_DAY = builder
           .comment("With Mutationcraft: the day its boss tier spawns naturally (the corrosion queen, the human herder, the",
-            "resenter, the parasitic shooter, the heavy hook). 0 holds nothing.")
+            "resenter, the parasitic shooter, the heavy hook). Unannounced in chat. 0 holds nothing.")
           .defineInRange("bossMutantsDay", 200, 0, 10000);
+        ARRIVALS_HOOK_LIMIT = builder
+          .comment("With Mutationcraft: a dying necroptor leaves no hook while this many hooks already stand within 48",
+            "blocks of it. Mutationcraft's own chain has no end - a hook summons about five necroptors a minute and",
+            "each one killed may leave another hook - so a nest under fire could double every few minutes. Below",
+            "the limit a nest still grows as Mutationcraft made it; natural hook spawns are never held, only counted.",
+            "0 = no limit (Mutationcraft's own behaviour).")
+          .defineInRange("hookLimit", 4, 0, 1000);
+        ARRIVALS_HOOK_CROWD_LIMIT = builder
+          .comment("With Mutationcraft: a hook summons nothing while this many other Mutationcraft creatures stand within",
+            "32 blocks of it, and starts again as they fall. A hook under fire stays below it; it stops a hook nobody",
+            "fights from piling up mutants for ever. 0 = no limit (Mutationcraft's own behaviour).")
+          .defineInRange("hookCrowdLimit", 24, 0, 1000);
         builder.pop();
 
         builder.push("guns");
@@ -928,7 +953,7 @@ public final class AutopilotConfig
           .comment("With 'Timeless & Classics Guns: Zero' (TaCZ) installed: guns take enchantments like any",
             "weapon — at the enchanting table, or from a book at the anvil — and keep their attachments",
             "and ammunition when they do. High Caliber (more damage) or Fungicide (far more, spore",
-            "creatures only), Marksman (stronger headshots), Shrapnel (the hit also wounds hostile mobs",
+            "creatures only; it exists only with Spore installed), Marksman (stronger headshots), Shrapnel (the hit also wounds hostile mobs",
             "packed around the target), Cryo Rounds (freezes) or Incendiary (burns). Explosive rounds'",
             "blast damage is not affected. Off (or the master off): the enchanting table refuses guns and",
             "enchantments already on a gun do nothing - a book still goes on at the anvil, it just sleeps.",
@@ -1168,7 +1193,8 @@ public final class AutopilotConfig
             "every world, a file from before the change is moved over once, at the next world start, and",
             "this number goes up so it never happens twice. 1 -> 2 (1.1.66): spores.festerTicks 240, the",
             "old default, becomes 0. 2 -> 3 (1.3): tweaks.disableVanillaPatrols true, the old default,",
-            "becomes false. Whatever you set afterwards is yours and is not touched again.")
+            "becomes false. 3 -> 4 (1.3.3): economy.chestMin/chestMax 6-15, the old defaults, become 1-4, and",
+            "mineshaftMin/mineshaftMax 2-5 become 0-2. Whatever you set afterwards is yours and is not touched again.")
           .defineInRange("configVersion", 1, 1, 1000);
         builder.pop();
 
@@ -1178,10 +1204,10 @@ public final class AutopilotConfig
         client.push("chat");
         MUTE_COLONY_CHAT = client
           .comment("Mute all colony chatter in YOUR chat only: MineColonies announcements (raids, research,",
-            "deaths, citizen news) and the autopilot's village milestones. Toggled in-game with",
-            "/colonyautopilot chat on|off. Other players are unaffected. Four lines still come through, on",
-            "purpose: the alert horn, the one-time Progression Mode notice, the rednight countdown and the",
-            "monster arrivals' countdown (arrivals.*).")
+            "deaths, citizen news), the autopilot's village milestones and its alert horn ('Help your village",
+            "defend!', 'Your village is infected!'). Toggled in-game with /colonyautopilot chat on|off. Other",
+            "players are unaffected. Three lines still come through, on purpose: the one-time Progression Mode",
+            "notice, the rednight countdown and the monster arrivals' countdown (arrivals.*).")
           .define("muteColonyChat", false);
         client.pop();
         CLIENT_SPEC = client.build();
@@ -1257,6 +1283,19 @@ public final class AutopilotConfig
         {
             DISABLE_VANILLA_PATROLS.set(false);
             ColonyAutopilot.LOGGER.info("Config brought up to 1.3: tweaks.disableVanillaPatrols true (the old default) -> false - vanilla pillager patrols are no longer turned off at world start. Set it back to true to keep them away; it will not be changed again.");
+        }
+
+        if (from < 4 && ECONOMY_CHEST_MIN.get() == 6 && ECONOMY_CHEST_MAX.get() == 15)
+        {
+            ECONOMY_CHEST_MIN.set(1);
+            ECONOMY_CHEST_MAX.set(4);
+            ColonyAutopilot.LOGGER.info("Config brought up to 1.3.3: economy.chestMin/chestMax 6-15 (the old defaults) -> 1-4 ColonyBucks per loot chest. Set them back for the old pay; they will not be changed again.");
+        }
+        if (from < 4 && ECONOMY_MINESHAFT_MIN.get() == 2 && ECONOMY_MINESHAFT_MAX.get() == 5)
+        {
+            ECONOMY_MINESHAFT_MIN.set(0);
+            ECONOMY_MINESHAFT_MAX.set(2);
+            ColonyAutopilot.LOGGER.info("Config brought up to 1.3.3: economy.mineshaftMin/mineshaftMax 2-5 (the old defaults) -> 0-2 ColonyBucks per mineshaft chest. Set them back for the old pay; they will not be changed again.");
         }
         CONFIG_VERSION.set(CURRENT_CONFIG_VERSION);
         SPEC.save();

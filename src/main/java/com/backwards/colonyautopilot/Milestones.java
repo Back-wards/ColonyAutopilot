@@ -135,7 +135,8 @@ public class Milestones
             return;
         }
         sounded.put(kind, now);
-        broadcast(colony, named(colony, Component.literal(text).withStyle(ChatFormatting.RED, ChatFormatting.BOLD)));
+        broadcast(colony, named(colony, Component.translatableWithFallback("colonyautopilot.horn", "%s", text)
+          .withStyle(ChatFormatting.RED, ChatFormatting.BOLD)));
         ColonyAutopilot.LOGGER.info("[{}] the horn sounds: {}", colony.getName(), text);
     }
 

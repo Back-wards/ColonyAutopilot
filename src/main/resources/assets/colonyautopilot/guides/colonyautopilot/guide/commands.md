@@ -10,8 +10,8 @@ Click any command to run it. The read-only ones (`status`, `report`, `problems`,
 `settings`, `zone wand|list`, `guide`, `treasury`), the `exchange` and the per-player
 `chat` mute work for anyone (the treasury and the exchange with access to the colony's
 huts); the ones that change the village for everyone — marked **op** below — need
-operator, and so do the `/function` and `/scoreboard` commands (in single-player:
-cheats on).
+operator, or in single-player the host of the world (cheats on or off). The `/function`
+and `/scoreboard` commands need operator too (in single-player: cheats on).
 
 ## Get the items directly
 
@@ -45,8 +45,8 @@ cheats on).
   colonies, and the page's **Reset** (or `colony <id> reset <key>`) hands one back
 * <CommandLink command="/colonyautopilot menu">/colonyautopilot menu</CommandLink> — the autopilot page
   for the colony you stand in (or the nearest): every switch and number for THAT colony (also in the town hall:
-  Settings → **Autopilot settings**). Anyone with hut access may look; the colony's owner and
-  officers may change
+  **Exchange** tab → **Autopilot settings**). Anyone with hut access may look; the colony's owner and
+  officers may change its PER-COLONY rows, and an operator or the single-player host its GLOBAL ones
 * <CommandLink command="/colonyautopilot colony settings">/colonyautopilot colony settings</CommandLink> — one
   colony's own settings from chat: `colony [<id>] settings [section]`, `colony [<id>] set <key> <value>`,
   `colony [<id>] reset <key>` (**op**). Without an id it is the colony you stand in; colony ids count
@@ -65,7 +65,8 @@ cheats on).
   stocked), today's and yesterday's ledger, where to deposit (anyone with access to its huts);
   `colony [<id>] treasury add <n>` puts bucks in (**op**)
 * <CommandLink command="/colonyautopilot chat off">/colonyautopilot chat off</CommandLink> — mute colony chatter in
-  your chat only; `chat on` restores it
+  your chat only, the alert horn included (the rednight and monster-arrival countdowns and the
+  one-time Progression Mode notice still come through); `chat on` restores it
 * <CommandLink command="/colonyautopilot zone wand">/colonyautopilot zone wand</CommandLink> — another Zone Marker;
   also `zone list` and `zone clear` (**op**)
 * <CommandLink command="/colonyautopilot guide">/colonyautopilot guide</CommandLink> — another copy of this guide

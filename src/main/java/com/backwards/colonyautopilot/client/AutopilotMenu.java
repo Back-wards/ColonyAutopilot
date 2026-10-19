@@ -41,7 +41,8 @@ public final class AutopilotMenu
                     return 0;
                 }
 
-                if (!mc.player.hasPermissions(2) && !colony.getPermissions().hasPermission(mc.player, Action.ACCESS_HUTS))
+                final boolean host = mc.getSingleplayerServer() != null && mc.getSingleplayerServer().isSingleplayerOwner(mc.player.getGameProfile());
+                if (!mc.player.hasPermissions(2) && !host && !colony.getPermissions().hasPermission(mc.player, Action.ACCESS_HUTS))
                 {
                     context.getSource().sendFailure(Component.translatable("colonyautopilot.gui.noaccess", colony.getName()));
                     return 0;

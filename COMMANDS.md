@@ -2,8 +2,9 @@
 
 They all live under `/colonyautopilot`. The read-only commands and the item hand-outs work
 for any survival player; the ones that change the village for everyone (marked **op**) need
-operator permission on a server — in single-player with cheats on, that is you. A style-pack guide
-follows the commands.
+operator permission on a server. In single-player the host of the world may run them too, with
+cheats on or off (also once the world is opened to LAN; a LAN guest still needs operator). A
+style-pack guide follows the commands.
 
 | Command | What it does |
 |---|---|
@@ -15,8 +16,8 @@ follows the commands.
 | `/colonyautopilot expansion off` / `on` | **op** — Stop / resume placing NEW buildings (the server default; a colony with its own `growth.expansion` keeps it) |
 | `/colonyautopilot golems off` / `on` | **op** — No more iron golems (the standing ones leave) / bring them back (the server default; a colony with its own `tweaks.villageGolem` keeps its golems) |
 | `/colonyautopilot settings [section]` | Every config key with its value, range and default, one line each; `settings <section.key>` shows one key with what it does; a key some colony holds its own value for (set on its page) is tagged with that colony and value (a count past three colonies) |
-| `/colonyautopilot set <section.key> <value>` | **op** — Change one config key live; it is written to the file at once. It is the server default: a colony that set the key on its page keeps its own value, and the reply names such colonies with the `colony <id> reset <key>` that hands one back |
-| `/colonyautopilot menu` | The autopilot page for the colony you stand in (or the nearest one) — every switch and number for THAT colony (also: town hall → Settings → **Autopilot settings**). Looking needs access to the colony's huts; changing, its owner or officer rank |
+| `/colonyautopilot set <section.key> <value>` | **op** — Change one config key live; it is written to the file at once (not the `meta` keys, the config's own bookkeeping). It is the server default: a colony that set the key on its page keeps its own value, and the reply names such colonies with the `colony <id> reset <key>` that hands one back |
+| `/colonyautopilot menu` | The autopilot page for the colony you stand in (or the nearest one) — every switch and number for THAT colony (also: town hall → **Exchange** tab → **Autopilot settings**). Each row says **PER-COLONY** (this colony only) or **GLOBAL** (every colony). Looking needs access to the colony's huts; changing a PER-COLONY row, its owner or officer rank; changing a GLOBAL row, an operator or the single-player host |
 | `/colonyautopilot colony [<id>] roads` / `roads lift` | **op** — Lay every finished building's road of one colony again (two a tick, the boot sweep's own pass), for ground you reshaped by hand or a building you took down, in passes until they settle; `lift` takes every road up cleanly and forgets it, and no road is laid — not even a finished hut's — until `roads` or the next boot. `roads` refuses while the autopilot or the colony's `growth.buildPaths` is off; `roads lift` works either way (e.g. to take the roads up before removing the mod). The log names each door, and warns once of any road a citizen cannot walk end to end. Without op, the colony's owner and officers have the same re-lay as **Re-lay roads** under **Trade** on the town hall's **Exchange** tab: refused, with the reason in its tooltip, while the autopilot or the colony's roads are off or a `roads lift` holds (only `roads` lifts that), and within a game-minute of the colony's last re-lay; `roads` itself has no such wait |
 | `/colonyautopilot colony [<id>] settings [section]` / `set <key> <value>` / `reset <key>` | **op** — One colony's own settings from chat. Without an id: the colony the player stands in (the console and command blocks give the id); colony ids count per dimension, so give an id from inside that colony's dimension |
 | `/colonyautopilot treasury [<id>]` | One colony's money: its ColonyBucks balance in whole bucks, the requests, researches and cures waiting for funds (while something is charged), what it saves for (the research it sets money aside for, else the costliest build or request waiting for funds, with its price and its price with the diamonds, gold and netherite in it stocked), today's and yesterday's ledger (earned by channel, spent by kind), whether it runs in Progression Mode, and where to deposit. Without an id: the colony you stand in. Anyone with access to the colony's huts may look |
@@ -24,7 +25,7 @@ follows the commands.
 | `/colonyautopilot exchange` | Trade diamonds, gold, ancient debris and netherite for ColonyBucks on the ordinary trading screen, in the colony you stand in (also: **Trade** on the town hall's **Exchange** tab). Anyone with access to the colony's huts may trade, while the colony is in Progression Mode |
 | `/colonyautopilot zone wand` / `list` / `clear` | A Zone Marker / this colony's protected zones / **op** — wipe them |
 | `/colonyautopilot guide` | Another copy of the field guide (needs the GuideME mod) |
-| `/colonyautopilot chat off` / `on` | Mute / restore colony chatter — for you only (the alert horn, the one-time Progression Mode notice, the rednight countdown and the monster arrivals' countdown still come through) |
+| `/colonyautopilot chat off` / `on` | Mute / restore colony chatter, the alert horn included — for you only (the one-time Progression Mode notice, the rednight countdown and the monster arrivals' countdown still come through) |
 
 ## `/colonyautopilot status`
 
@@ -98,7 +99,7 @@ it on one short line each — value, range and default — and `settings growth.
 shows one key with what it does. The same information as `config/colonyautopilot-server.toml`,
 without opening the file; the town hall page shows one colony's switches and numbers with
 their descriptions, which is the easier read (lists and text keys live in the file only). There
-are 75 on/off switches and 41 numbers in there; only a handful have their own command.
+are 77 on/off switches and 46 numbers in there; only a handful have their own command.
 
 **Server default versus a colony's own value.** The town hall page (and `colony set`) give ONE
 colony its own value of a key, and a colony's own value outranks the server default. `set`
@@ -106,11 +107,14 @@ changes the default only, so a colony switched off on its page stays off; the re
 colonies that keep their own value, and `settings` tags such keys `[own value in <colony> (#id: value)]`.
 To hand a colony back to the default: the Reset button on its page row, or `/colonyautopilot colony <id> reset <key>`.
 On the page, setting a value equal to the server default is the same as Reset; `colony set` pins the
-value even then, which is how you exempt a colony before moving the default.
+value even then, which is how you exempt a colony before moving the default. A row marked
+**GLOBAL** on the page is the server's one value, not the colony's: an operator or the
+single-player host who changes it there does exactly what `set` does, chat reply included.
 
 `set <section.key> <value>` (**op**) changes one of them live and writes it to the file at
 once: `set growth.terraform false`, `set tweaks.villageGolem false`, `set growth.placementCooldownMinutes 20`.
-Values are typed like the key's default and range-checked; lists stay file-only. The reply
+Values are typed like the key's default and range-checked; lists stay file-only, and the
+`meta` keys (the config's own bookkeeping, such as its version) are refused. The reply
 says when the change lands: most keys on the system's next pass; the monster spawn cap,
 potion durations and the world tweaks (rain work, vanilla patrols, fire tick, mob griefing, spawn chunks)
 at once, and a tweak switched off gives the world its own value back. Keys that have their
@@ -132,9 +136,9 @@ growth plan. Persists in the server config.
 The earplugs, **for you only**. A running colony talks a lot — MineColonies announces raids,
 research, deaths and citizen news, and the autopilot adds its village milestones on top.
 `chat off` mutes it in your own chat: both MineColonies' announcements and the autopilot's
-news. Three lines still come through, on purpose: the alert horn when your village is attacked
-or infected, the one-time Progression Mode notice, and the rednight countdown (the war's
-warning, not village news). Nothing else changes — the villages keep doing everything, other
+news, the alert horn when your village is attacked or infected included. Three lines still come
+through, on purpose: the one-time Progression Mode notice, the rednight countdown and the
+monster arrivals' countdown (the war's warnings, not village news). Nothing else changes — the villages keep doing everything, other
 players keep hearing everything, and the log keeps recording everything. `chat on` brings the
 chatter back. The choice is saved per player (in your client config) and survives relogs.
 
@@ -191,7 +195,7 @@ colonies that predate it.
   Mode, each raider killed (by anyone) in a MineColonies raid pays one more buck into the
   raided colony's treasury, up to the number of raiders the raid was sent with; the owner and officers
   online hear the total when the raid is over, or the first of them to come online. Bosses (150 health or more, or tagged as bosses:
-  the calamities, not the elites), villagers and colony citizens never drop one. Dungeon and structure chests hold 6–15, mineshaft chests 2–5, village chests none;
+  the calamities, not the elites), villagers and colony citizens never drop one. Dungeon and structure chests hold 1–4, mineshaft chests 0–2, village chests none;
   loot a datapack rolls as another entity (Spore Inquisition's offerings) holds none.
   The drops and the chests' bucks come even while the autopilot is off; the kill banking
   and raid pay need it on. The item cannot be crafted and survives fire and lava.
@@ -227,14 +231,17 @@ colonies that predate it.
   what went out (construction, research, guard gear, gunners' rounds, tools, repairs, other
   supply, cures), and what players sold at the exchange.
 - **One job per builder.** Each built Builder's Hut carries one job at a time, so a poor
-  colony never turns into a field of empty construction sites. If you write your own growth
-  plan, list the Builder's Hut early: until one is built, nothing else is placed.
+  colony never turns into a field of empty construction sites. The plan's opening Builder's
+  Huts (three in the default plan) are exempt, so the village gets all its first crews without
+  waiting. If you write your own growth plan, list the Builder's Hut early: until one is built,
+  nothing else is placed, and the count of that first Builder's Hut step is how many go up
+  without waiting.
 - **Turning it off.** The colony's owner and officers switch **Progression Mode** off on the
   town hall's autopilot page (the *ColonyBucks* section), unless the server locks it on
   (`economy.progressionModeLocked`). The balance keeps either way. Prices, drop rates, chest
   amounts and the exchange's offers are server settings (`/colonyautopilot settings economy`
   lists them). Anyone with access to a colony's huts reads its treasury with
-  `/colonyautopilot treasury [<id>]`; operators top it up with
+  `/colonyautopilot treasury [<id>]`; operators (and the single-player host) top it up with
   `colony [<id>] treasury add <n>`.
 - **Hands off another colony's huts.** MineColonies_Tweaks' and MineColonies_Compatibility's
   hut pages (maximum stock, item and id lists, farm field sizes, the teach and inventory

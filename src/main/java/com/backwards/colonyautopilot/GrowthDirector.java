@@ -151,6 +151,8 @@ public class GrowthDirector
 
     private List<ResolvedStep> gravesPlan = List.of();
 
+    private ResolvedStep openingBuilderStep;
+
     private List<ResolvedStep> planFor(final IColony colony)
     {
         return AutopilotConfig.live(AutopilotConfig.NO_GRAVES) && !AutopilotConfig.live(colony, AutopilotConfig.NO_GRAVES) ? gravesPlan : plan;
@@ -1363,6 +1365,16 @@ public class GrowthDirector
             }
         }
         planRankByHut = ranks;
+        openingBuilderStep = null;
+        for (final ResolvedStep step : plan)
+        {
+            if (step.hut() == ModBlocks.blockHutBuilder && step.targetLevel() == 0)
+            {
+                openingBuilderStep = step;
+                break;
+            }
+        }
+        BuilderCap.setOpeningBuilderHuts(openingBuilderStep == null ? 1 : openingBuilderStep.targetCount());
         pendingRoadReconnects.clear();
 
         lastPlacement.clear();
@@ -1991,8 +2003,29 @@ public class GrowthDirector
         final Set<Block> unavailable = unavailableHuts.getOrDefault(key, Set.of());
         final Map<Block, Long> plotBlocked = plotBlockedUntil.getOrDefault(key, Map.of());
 
+        final List<ResolvedStep> walk = planFor(colony);
+        boolean openingReachable = openingBuilderStep != null;
+        for (int i = 0; openingReachable && walk.get(i) != openingBuilderStep; i++)
+        {
+            final ResolvedStep earlier = walk.get(i);
+            final Long earlierRetry = plotBlocked.get(earlier.hut());
+            final int earlierStanding = countByHut.getOrDefault(earlier.hut(), 0)
+              + (earlier.hut() == ModBlocks.blockHutGuardTower ? countByHut.getOrDefault(ModBlocks.blockHutBarracks, 0) : 0);
+            openingReachable = earlier.targetLevel() > 0
+              ? maxLevelByHut.getOrDefault(earlier.hut(), 0) >= earlier.targetLevel()
+              : earlier.hut() == ModBlocks.blockHutTownHall || citizens >= earlier.minCitizens() || earlierStanding >= earlier.targetCount()
+                  || unavailable.contains(earlier.hut()) || (earlierRetry != null && now < earlierRetry)
+                  || (earlier.hut() == ModBlocks.blockHutGraveyard && AutopilotConfig.live(colony, AutopilotConfig.NO_GRAVES));
+        }
+        final Long openingRetry = plotBlocked.get(ModBlocks.blockHutBuilder);
+        final boolean openingBuildersDue = openingReachable && AutopilotConfig.get(colony, AutopilotConfig.EXPANSION_ENABLED)
+              && countByHut.getOrDefault(ModBlocks.blockHutBuilder, 0) < openingBuilderStep.targetCount()
+              && countByHut.getOrDefault(ModBlocks.blockHutTownHall, 0) > 0 && citizens >= openingBuilderStep.minCitizens()
+              && !unavailable.contains(ModBlocks.blockHutBuilder) && (openingRetry == null || now >= openingRetry)
+              && (citizens < census.getMaxCitizens() || census.getJoblessCitizen() != null);
+
         final Long towerRetry = plotBlocked.get(ModBlocks.blockHutGuardTower);
-        if (!unavailable.contains(ModBlocks.blockHutGuardTower) && (towerRetry == null || now >= towerRetry))
+        if (!openingBuildersDue && !unavailable.contains(ModBlocks.blockHutGuardTower) && (towerRetry == null || now >= towerRetry))
         {
             int unguarded = 0;
             int guardPosts = 0;

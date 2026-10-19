@@ -45,6 +45,16 @@ public class AutopilotCommands
         this.golems = golems;
     }
 
+    static boolean operator(final CommandSourceStack source)
+    {
+        return source.hasPermission(2) || (source.getPlayer() != null && com.backwards.colonyautopilot.net.SettingsPayloads.mayAdminister(source.getPlayer()));
+    }
+
+    public void setGlobal(final ServerPlayer player, final String key, final String text)
+    {
+        setValue(player.createCommandSourceStack(), key, text);
+    }
+
     @SubscribeEvent
     public void onRegisterCommands(final RegisterCommandsEvent event)
     {
@@ -52,16 +62,16 @@ public class AutopilotCommands
           Commands.literal("colonyautopilot")
             .then(Commands.literal("status").executes(context -> status(context.getSource())))
             .then(Commands.literal("report").executes(context -> report(context.getSource())))
-            .then(Commands.literal("on").requires(src -> src.hasPermission(2)).executes(context -> setMaster(context.getSource(), true)))
-            .then(Commands.literal("off").requires(src -> src.hasPermission(2)).executes(context -> setMaster(context.getSource(), false)))
-            .then(Commands.literal("expansion").requires(src -> src.hasPermission(2))
+            .then(Commands.literal("on").requires(AutopilotCommands::operator).executes(context -> setMaster(context.getSource(), true)))
+            .then(Commands.literal("off").requires(AutopilotCommands::operator).executes(context -> setMaster(context.getSource(), false)))
+            .then(Commands.literal("expansion").requires(AutopilotCommands::operator)
               .then(Commands.literal("on").executes(context -> setExpansion(context.getSource(), true)))
               .then(Commands.literal("off").executes(context -> setExpansion(context.getSource(), false))))
-            .then(Commands.literal("golems").requires(src -> src.hasPermission(2))
+            .then(Commands.literal("golems").requires(AutopilotCommands::operator)
               .then(Commands.literal("on").executes(context -> setGolems(context.getSource(), true)))
               .then(Commands.literal("off").executes(context -> setGolems(context.getSource(), false))))
 
-            .then(Commands.literal("colony").requires(src -> src.hasPermission(2))
+            .then(Commands.literal("colony").requires(AutopilotCommands::operator)
               .then(Commands.literal("settings")
                 .executes(context -> colonySettings(context.getSource(), null, null))
                 .then(Commands.argument("section", StringArgumentType.word())
@@ -102,8 +112,8 @@ public class AutopilotCommands
                         IntegerArgumentType.getInteger(context, "bucks"))))))))
             .then(Commands.literal("problems")
               .executes(context -> problems(context.getSource()))
-              .then(Commands.literal("on").requires(src -> src.hasPermission(2)).executes(context -> setProblems(context.getSource(), true)))
-              .then(Commands.literal("off").requires(src -> src.hasPermission(2)).executes(context -> setProblems(context.getSource(), false)))
+              .then(Commands.literal("on").requires(AutopilotCommands::operator).executes(context -> setProblems(context.getSource(), true)))
+              .then(Commands.literal("off").requires(AutopilotCommands::operator).executes(context -> setProblems(context.getSource(), false)))
               .then(Commands.literal("goto")
                 .then(Commands.argument("x", IntegerArgumentType.integer())
                   .then(Commands.argument("y", IntegerArgumentType.integer())
@@ -114,7 +124,7 @@ public class AutopilotCommands
               .executes(context -> settings(context.getSource(), null))
               .then(Commands.argument("section", StringArgumentType.word())
                 .executes(context -> settings(context.getSource(), StringArgumentType.getString(context, "section")))))
-            .then(Commands.literal("set").requires(src -> src.hasPermission(2))
+            .then(Commands.literal("set").requires(AutopilotCommands::operator)
               .then(Commands.argument("key", StringArgumentType.word())
                 .then(Commands.argument("value", StringArgumentType.greedyString())
                   .executes(context -> setValue(context.getSource(),
@@ -122,7 +132,7 @@ public class AutopilotCommands
             .then(Commands.literal("zone")
               .then(Commands.literal("wand").executes(context -> giveWand(context.getSource())))
               .then(Commands.literal("list").executes(context -> listZones(context.getSource())))
-              .then(Commands.literal("clear").requires(src -> src.hasPermission(2)).executes(context -> clearZones(context.getSource()))))
+              .then(Commands.literal("clear").requires(AutopilotCommands::operator).executes(context -> clearZones(context.getSource()))))
             .then(Commands.literal("exchange").executes(context -> openExchange(context.getSource())))
 
             .then(Commands.literal("treasury")
@@ -186,7 +196,7 @@ public class AutopilotCommands
             return 0;
         }
         final IColony colony = IColonyManager.getInstance().getColonyByPosFromWorld(level, pos);
-        if (!source.hasPermission(2) && (colony == null || !colony.getPermissions().hasPermission(player, Action.TELEPORT_TO_COLONY)))
+        if (!operator(source) && (colony == null || !colony.getPermissions().hasPermission(player, Action.TELEPORT_TO_COLONY)))
         {
             source.sendFailure(Component.literal("Only players the colony there lets teleport in (Friend rank and up) can go to that spot."));
             return 0;
@@ -448,6 +458,12 @@ public class AutopilotCommands
             source.sendFailure(Component.literal("No config key '" + key + "' — '/colonyautopilot settings <section>' lists them as section.key."));
             return 0;
         }
+
+        if (key.startsWith("meta."))
+        {
+            source.sendFailure(Component.literal(key + " is the config's own bookkeeping — it is not set by hand."));
+            return 0;
+        }
         final Object parsed;
         try
         {
@@ -670,7 +686,7 @@ public class AutopilotCommands
         }
         final ServerPlayer player = source.getPlayer();
 
-        if (player != null && !source.hasPermission(2) && !com.backwards.colonyautopilot.net.SettingsPayloads.mayLook(colony, player))
+        if (player != null && !operator(source) && !com.backwards.colonyautopilot.net.SettingsPayloads.mayLook(colony, player))
         {
             source.sendFailure(Component.literal("Only members of " + colony.getName() + " may read its treasury."));
             return 0;

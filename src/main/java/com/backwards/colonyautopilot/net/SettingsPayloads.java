@@ -1,6 +1,7 @@
 // Colony Autopilot - created by Backwards - https://www.curseforge.com/members/backwards/projects - Copyright (C) 2026 Backwards - GPL-3.0
 package com.backwards.colonyautopilot.net;
 
+import com.backwards.colonyautopilot.AutopilotCommands;
 import com.backwards.colonyautopilot.AutopilotConfig;
 import com.backwards.colonyautopilot.BuilderCap;
 import com.backwards.colonyautopilot.ColonyAutopilot;
@@ -35,8 +36,15 @@ public final class SettingsPayloads
 
     private static final int MAX_TEXT = 64;
 
+    private static AutopilotCommands commands;
+
     private SettingsPayloads()
     {
+    }
+
+    public static void setCommands(final AutopilotCommands registered)
+    {
+        commands = registered;
     }
 
     public record OpenSettings(ColonyId colony) implements CustomPacketPayload
@@ -71,7 +79,8 @@ public final class SettingsPayloads
         }
     }
 
-    public record Row(String path, String type, String value, String def, String min, String max, boolean overridden, boolean serverWide, String comment)
+    public record Row(String path, String type, String value, String def, String min, String max, boolean overridden, boolean serverWide,
+                      boolean editable, String comment)
     {
         static void write(final RegistryFriendlyByteBuf buf, final Row row)
         {
@@ -83,13 +92,14 @@ public final class SettingsPayloads
             buf.writeUtf(row.max(), MAX_TEXT);
             buf.writeBoolean(row.overridden());
             buf.writeBoolean(row.serverWide());
+            buf.writeBoolean(row.editable());
             buf.writeUtf(row.comment(), 2048);
         }
 
         static Row read(final RegistryFriendlyByteBuf buf)
         {
             return new Row(buf.readUtf(128), buf.readUtf(16), buf.readUtf(MAX_TEXT), buf.readUtf(MAX_TEXT), buf.readUtf(MAX_TEXT), buf.readUtf(MAX_TEXT),
-              buf.readBoolean(), buf.readBoolean(), buf.readUtf(2048));
+              buf.readBoolean(), buf.readBoolean(), buf.readBoolean(), buf.readUtf(2048));
         }
     }
 
@@ -183,7 +193,7 @@ public final class SettingsPayloads
     public static void register(final RegisterPayloadHandlersEvent event)
     {
 
-        final PayloadRegistrar registrar = event.registrar("7");
+        final PayloadRegistrar registrar = event.registrar("8");
         registrar.playToServer(ExchangePayloads.OpenExchange.TYPE, ExchangePayloads.OpenExchange.CODEC, ExchangePayloads::onOpenExchange);
         registrar.playToServer(ExchangePayloads.RelayRoads.TYPE, ExchangePayloads.RelayRoads.CODEC, ExchangePayloads::onRelayRoads);
         registrar.playToServer(OpenSettings.TYPE, OpenSettings.CODEC, SettingsPayloads::onOpen);
@@ -232,8 +242,22 @@ public final class SettingsPayloads
                 PacketDistributor.sendToPlayer(player, mayLook(colony, player) ? snapshot(colony, player) : denied(colony));
                 return;
             }
-            final ColonySettings.Key key = ColonySettings.find(payload.path());
-            if (key != null)
+            final ColonySettings.Key found = ColonySettings.find(payload.path());
+            final ColonySettings.Key key = found != null && onPage(found) ? found : null;
+            if (key != null && key.scope() == ColonySettings.Scope.SERVER)
+            {
+
+                if (!mayAdminister(player))
+                {
+                    player.sendSystemMessage(Component.literal(payload.path() + ": a global setting — only an operator, or the host of a single-player world, may change it")
+                      .withStyle(ChatFormatting.RED));
+                }
+                else if (!payload.reset() && commands != null)
+                {
+                    commands.setGlobal(player, payload.path(), payload.text());
+                }
+            }
+            else if (key != null)
             {
                 if (payload.reset())
                 {
@@ -260,12 +284,22 @@ public final class SettingsPayloads
 
     public static boolean mayLook(final IColony colony, final ServerPlayer player)
     {
-        return player.hasPermissions(2) || colony.getPermissions().hasPermission(player, Action.ACCESS_HUTS);
+        return mayAdminister(player) || colony.getPermissions().hasPermission(player, Action.ACCESS_HUTS);
     }
 
     static boolean mayEdit(final IColony colony, final ServerPlayer player)
     {
-        return player.hasPermissions(2) || colony.getPermissions().hasPermission(player, Action.MANAGE_HUTS);
+        return mayAdminister(player) || colony.getPermissions().hasPermission(player, Action.MANAGE_HUTS);
+    }
+
+    public static boolean mayAdminister(final ServerPlayer player)
+    {
+        return player.hasPermissions(2) || (player.getServer() != null && player.getServer().isSingleplayerOwner(player.getGameProfile()));
+    }
+
+    private static boolean onPage(final ColonySettings.Key key)
+    {
+        return !key.path().startsWith("meta.");
     }
 
     static SettingsSnapshot denied(final IColony colony)
@@ -283,15 +317,23 @@ public final class SettingsPayloads
     static SettingsSnapshot snapshot(final IColony colony, final ServerPlayer player)
     {
         final List<Row> rows = new ArrayList<>();
+        final boolean mayEdit = mayEdit(colony, player);
+        final boolean mayAdminister = mayAdminister(player);
         for (final ColonySettings.Key key : ColonySettings.keys())
         {
+            if (!onPage(key))
+            {
+                continue;
+            }
             final String type = key.type() == Boolean.class ? "boolean" : key.type() == Integer.class ? "int" : "double";
 
             final boolean locked = ColonySettings.locked(key);
+            final boolean global = key.scope() == ColonySettings.Scope.SERVER;
 
             rows.add(new Row(key.path(), type, String.valueOf(ColonySettings.effective(colony, key)), String.valueOf(ColonySettings.serverValue(key)),
               key.min() == null ? "" : String.valueOf(key.min()), key.max() == null ? "" : String.valueOf(key.max()),
-              ColonySettings.isOverridden(colony, key) && !locked, key.scope() == ColonySettings.Scope.SERVER || locked, tooltip(key.comment())));
+              ColonySettings.isOverridden(colony, key) && !locked && !global, global || locked, !locked && (global ? mayAdminister : mayEdit),
+              tooltip(key.comment())));
         }
         final boolean progression = AutopilotConfig.masterOn() && AutopilotConfig.progressionMode(colony);
 

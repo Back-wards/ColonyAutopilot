@@ -158,16 +158,19 @@ public class ResearchDirector
     {
         final boolean freeSpeed = AutopilotConfig.live(colony, AutopilotConfig.RESEARCH_FREE_BUILD_SPEED);
         final boolean freeBarracks = AutopilotConfig.live(colony, AutopilotConfig.RESEARCH_FREE_BARRACKS);
+        final boolean freeBlacksmith = AutopilotConfig.live(colony, AutopilotConfig.RESEARCH_FREE_BLACKSMITH);
         final boolean freePopulation = AutopilotConfig.live(colony, AutopilotConfig.RESEARCH_FREE_POPULATION);
         final boolean freeDruid = AutopilotConfig.live(colony, AutopilotConfig.RESEARCH_FREE_DRUID);
-        final String switches = freeSpeed + "|" + freeBarracks + "|" + freePopulation + "|" + freeDruid;
-        if ((!freeSpeed && !freeBarracks && !freePopulation && !freeDruid)
+        final String switches = freeSpeed + "|" + freeBarracks + "|" + freeBlacksmith + "|" + freePopulation + "|" + freeDruid;
+        if ((!freeSpeed && !freeBarracks && !freeBlacksmith && !freePopulation && !freeDruid)
               || switches.equals(freeResearchGranted.put(ColonyAutopilot.colonyKey(colony), switches)))
         {
             return;
         }
         final ResourceLocation barracksEffect = freeBarracks
           ? colony.getResearchManager().getResearchEffectIdFrom(ModBlocks.blockHutBarracks) : null;
+        final ResourceLocation blacksmithEffect = freeBlacksmith
+          ? colony.getResearchManager().getResearchEffectIdFrom(ModBlocks.blockHutBlacksmith) : null;
         final ILocalResearchTree local = colony.getResearchManager().getResearchTree();
         final IGlobalResearchTree tree = IGlobalResearchTree.getInstance();
         int granted = 0;
@@ -200,6 +203,10 @@ public class ResearchDirector
                     else if (barracksEffect != null && barracksEffect.equals(effect.getId()))
                     {
                         wantedFor = "barracks";
+                    }
+                    else if (blacksmithEffect != null && blacksmithEffect.equals(effect.getId()))
+                    {
+                        wantedFor = "blacksmith";
                     }
                     else if (freePopulation && ResearchConstants.CITIZEN_CAP.equals(effect.getId()))
                     {

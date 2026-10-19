@@ -67,7 +67,7 @@ public final class ColonySettings
       "tweaks.spawnStarterKit", "tweaks.muteFarmersDelightRecipeErrors", "tweaks.workBudgetPerTick",
       "guns.enchantments", "guns.fullAutoGunners", "spores.gracePeriodDays", "spores.turretsTargetInfected", "spores.turretsInvulnerable",
       "arrivals.bornInChaosDay", "arrivals.mutantsDay", "arrivals.advancedMutantsDay", "arrivals.eliteMutantsDay",
-      "arrivals.bossMutantsDay",
+      "arrivals.bossMutantsDay", "arrivals.hookLimit", "arrivals.hookCrowdLimit",
 
       "autoupgrade.checkIntervalSeconds", "problems.enabled", "milestones.problemChat", "zones.maxPerColony", "growth.frontierTickets",
 

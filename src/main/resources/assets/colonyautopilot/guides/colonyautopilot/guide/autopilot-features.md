@@ -15,19 +15,23 @@ loot excepted).
 ## Your colony's settings
 
 Every switch and number of the autopilot can be set **per colony**: open the town hall,
-turn to **Settings**, and click **Autopilot settings** — or run
+turn to the **Exchange** tab (the coin seal), and click **Autopilot settings** — or run
 <CommandLink command="/colonyautopilot menu">/colonyautopilot menu</CommandLink> where you stand.
 The page turns like the rest of the book: sections on the left leaf, the open section's
-keys on the right. A switch toggles On/Off, a number takes a value and **Set**, and the
-**Reset** beside a value you changed puts the server default back (a row you may only look at says *custom* instead).
-A row that says *global* is the same for every colony on the server and cannot be changed
-here: change it in `config/colonyautopilot-server.toml`, or as an operator with
-<CommandLink command="/colonyautopilot set">/colonyautopilot set section.key value</CommandLink>.
-Those keys are the server's on purpose: prices, rates, world tweaks and the spore grace touch
-every colony and every player, so one colony's owner may not set them for the others, and
-nobody changes them by accident from a colony's page. In singleplayer you are the server:
-use the file, or the command with cheats on. Hover a name for what it does, its default
-and its range.
+keys on the right. Under each name a row says **PER-COLONY** (this colony only) or
+**GLOBAL** (every colony on the server). A switch toggles On/Off, a number takes a value and
+**Set**, and the **Reset** beside a value you changed puts the server default back (a row you
+may only look at says *custom* after PER-COLONY instead).
+A **GLOBAL** row is the same for every colony on the server: only an operator, or the host of
+a single-player world, may change it — here on the page, with
+<CommandLink command="/colonyautopilot set">/colonyautopilot set section.key value</CommandLink>,
+or in `config/colonyautopilot-server.toml`. Those keys are the server's on purpose: prices,
+rates, world tweaks and the spore grace touch every colony and every player, so one colony's
+owner may not set them for the others. In single-player you are the server: the host changes
+them right here, cheats on or off, and they are saved in the game profile's config, so they
+hold for every world played in that profile — all but the master switch, which each world
+keeps for itself, so your other worlds keep their own. Hover a name for what it does, its
+default and its range.
 
 Everyone with access to the colony's huts may look; the colony's **owner and officers**
 may change (MineColonies' own hut-settings rule). The server's
@@ -35,10 +39,10 @@ may change (MineColonies' own hut-settings rule). The server's
 values live in the world save. A few keys are server-wide — the master switch, the world
 and gamerule tweaks, the gun-enchantment and full-auto keys, the spore-grace and turret
 keys, the supply's pace and the ColonyBucks prices and rates, the switch that locks
-Progression Mode on (the Progression Mode row then reads global too), and a few housekeeping
-keys (the upgrade clock, the problem ledger and its chat line, zones per colony, frontier
-tickets, the per-tick work budget) — and the page marks them "global". Gunner guards is set
-per colony.
+Progression Mode on (the Progression Mode row then reads GLOBAL · locked, and nobody can
+change it there), and a few housekeeping keys (the upgrade clock, the problem ledger and its
+chat line, zones per colony, frontier tickets, the per-tick work budget) — and the page marks
+them GLOBAL. Gunner guards is set per colony.
 <CommandLink command="/colonyautopilot settings">/colonyautopilot settings</CommandLink> still lists the
 server defaults in chat.
 
@@ -82,7 +86,7 @@ are a cure's.
   In Progression Mode each raider killed in a MineColonies raid pays one more buck into
   the raided colony's treasury (up to the raid's size), and the officers hear the total
   when it ends.
-  Dungeon and structure chests hold 6–15, mineshaft chests 2–5. Village chests give none.
+  Dungeon and structure chests hold 1–4, mineshaft chests 0–2. Village chests give none.
 * **Exchange** — the town hall's **Exchange** tab (the ColonyBucks seal under Settings) and its **Trade**
   button, or <CommandLink command="/colonyautopilot exchange">/colonyautopilot exchange</CommandLink>,
   trade diamonds, gold, ancient debris and netherite for bucks, for a colony in Progression Mode:
@@ -98,7 +102,8 @@ are a cure's.
   them from the providence and selling them back gains
   nothing at the default markup; with the mode or the exchange off they cost what they always did.
 * **Short of money** — requests wait (nothing is lost), and each built Builder's Hut carries one
-  job at a time. The colony saves for the university's next research: its price is set aside
+  job at a time; the plan's first Builder's Huts (three by default) go up without waiting.
+  The colony saves for the university's next research: its price is set aside
   from every other spender and it is bought at once when the savings cover it. The town hall's
   **Exchange** tab (the treasury in whole bucks, and the day's ledger: what came in and what went out) and
   <CommandLink command="/colonyautopilot treasury">/colonyautopilot treasury</CommandLink> show
@@ -169,9 +174,11 @@ are a cure's.
   and worn kit; the combat and archery trainees and the nether worker keep their
   worn weapons too, on them and on the training huts' racks; a plantation and the
   warehouse keep the vines and sea grass the colony's plantation fields plant from.
-* **Quartermaster** — every worker's tool and every guard's armor is upgraded to
-  the best the village can craft; enchanted and modded gear is never touched. In
-  Progression Mode couriers and the blacksmith are passed over.
+* **Quartermaster** — every ten seconds, every worker's tools and every guard's armor
+  are upgraded to the best the village can craft, all at once; a worse piece is replaced
+  and thrown away even when it is enchanted. Modded armor is never touched. Couriers,
+  the blacksmith and the undertaker are passed over, and so are the tools a builder
+  carries for a blueprint; in Progression Mode each upgrade is paid.
 
 ## People
 
@@ -187,7 +194,11 @@ are a cure's.
   beds are free; wedged workers are unstuck.
 * **Research** — the university researches the whole tree unattended, including
   the three tier-6 capstones (+6 health for all citizens, double-life guard
-  armour, faster building).
+  armour, faster building). The Barracks and the Blacksmith's Hut come unlocked at
+  founding, so the blacksmith rises early (right after the Warehouse) and the guards
+  reach iron gear sooner. That order is the default plan of a new growth-plan file: a
+  `config/colonyautopilot-growthplan.json` written by an older version keeps its own
+  order.
 
 ## War
 

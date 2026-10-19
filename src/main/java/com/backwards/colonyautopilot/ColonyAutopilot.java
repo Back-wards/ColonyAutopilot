@@ -98,7 +98,9 @@ public class ColonyAutopilot
         NeoForge.EVENT_BUS.register(workshops);
         NeoForge.EVENT_BUS.register(new LampLighter(growth));
         NeoForge.EVENT_BUS.register(new Decorator(growth));
-        NeoForge.EVENT_BUS.register(new AutopilotCommands(growth, golems));
+        final AutopilotCommands commands = new AutopilotCommands(growth, golems);
+        com.backwards.colonyautopilot.net.SettingsPayloads.setCommands(commands);
+        NeoForge.EVENT_BUS.register(commands);
         NeoForge.EVENT_BUS.register(new WarehouseJanitor());
         NeoForge.EVENT_BUS.register(new MourningMute());
         NeoForge.EVENT_BUS.register(new Quartermaster());

@@ -127,6 +127,8 @@ final class GrowthPlanLoader
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutHome, "Residence", 4, 2),
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutFarmer, "Farm", 4, 1),
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutWareHouse, "Warehouse", 4, 1),
+
+          new GrowthDirector.ResolvedStep(ModBlocks.blockHutBlacksmith, "Blacksmith's Hut", 4, 1),
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutDeliveryman, "Courier's Hut", 5, 1),
 
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutCook, "Dining Hall", 5, 1),
@@ -145,7 +147,6 @@ final class GrowthPlanLoader
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutStoneSmeltery, "Stone Smeltery", 9, 1),
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutTownHall, "Town Hall", 10, 1, 2),
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutHome, "Residence", 10, 6),
-          new GrowthDirector.ResolvedStep(ModBlocks.blockHutBlacksmith, "Blacksmith's Hut", 10, 1),
 
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutBarracks, "Barracks", 10, 1),
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutComposter, "Composter's Hut", 11, 1),

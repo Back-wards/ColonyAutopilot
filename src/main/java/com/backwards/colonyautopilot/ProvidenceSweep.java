@@ -1119,6 +1119,15 @@ public class ProvidenceSweep
             }
         }
 
+        boolean smeltery = false;
+        for (final IBuilding building : colony.getServerBuildingManager().getBuildings().values())
+        {
+            if (building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutSmeltery && building.getBuildingLevel() > 0)
+            {
+                smeltery = true;
+                break;
+            }
+        }
         for (final IToken<?> token : strandedSet)
         {
             final IRequest<?> request = resolved.get(token);
@@ -1126,7 +1135,7 @@ public class ProvidenceSweep
             {
                 continue;
             }
-            if (smithTier > 0)
+            if (smithTier > 0 && smeltery)
             {
                 final Long seen = seenForColony.putIfAbsent(token, now);
                 if (seen == null || now - seen < delayTicks)

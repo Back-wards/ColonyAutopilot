@@ -110,7 +110,8 @@ before you remove the mod, or the held posts stay shut.
 
 * **High Caliber I–V** — +12% bullet damage per level.
 * **Fungicide I–V** — +25% per level, against spore creatures only. Cannot
-  share a gun with High Caliber.
+  share a gun with High Caliber. Exists only while Fungal Infection: Spore is
+  installed.
 * **Marksman I–III** — +25% headshot damage per level.
 * **Shrapnel I–III** — every bullet that hits also wounds the nearest hostile
   mobs within about 2.5 blocks of the target for 10% of that bullet's damage:
