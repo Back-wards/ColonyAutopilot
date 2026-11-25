@@ -8,7 +8,6 @@ import com.minecolonies.api.colony.IColonyManager;
 import com.minecolonies.api.colony.buildings.IBuilding;
 import com.minecolonies.api.colony.requestsystem.manager.IRequestManager;
 import com.minecolonies.api.colony.requestsystem.request.IRequest;
-import com.minecolonies.api.colony.requestsystem.requestable.Tool;
 import com.minecolonies.api.colony.requestsystem.token.IToken;
 import com.minecolonies.api.crafting.ItemStorage;
 import com.minecolonies.api.entity.mobs.AbstractEntityMinecoloniesRaider;
@@ -63,11 +62,9 @@ import java.util.Set;
 public final class Treasury
 {
 
-    private static final ResourceLocation TACZ_GUN = ResourceLocation.fromNamespaceAndPath("tacz", "modern_kinetic_gun");
-
     private static final Map<ColonyId, Map<IToken<?>, Refusal>> WAITING_REQUESTS = new HashMap<>();
 
-    record Refusal(long credits, ProvidenceSweep.Category category, Goal goal, boolean crafterHeld)
+    record Refusal(long credits, ProvidenceSweep.Category category, Goal goal, boolean crafterHeld, ItemStack pick, int smithTier)
     {
     }
 
@@ -88,7 +85,7 @@ public final class Treasury
     {
         KILLS("kills banked", true), RAIDS("raid pay", true), DEPOSITS("deposits", true), RELIEF("operator relief", true),
         EXCHANGE("sold at the exchange", true), CONSTRUCTION("construction", false), RESEARCH("research", false), GEAR("guard gear", false),
-        ROUNDS("gunners' rounds", false), TOOLS("tools", false), SUPPLY("other supply", false), REPAIRS("repairs", false), CURES("cures", false);
+        TOOLS("tools", false), SUPPLY("other supply", false), REPAIRS("repairs", false), CURES("cures", false);
 
         public final String label;
         public final boolean income;
@@ -129,7 +126,7 @@ public final class Treasury
         }
         else
         {
-            gear = BuiltInRegistries.ITEM.getKey(item).equals(TACZ_GUN);
+            gear = false;
         }
         final long weighed = gear ? (long) stack.getCount() * AutopilotConfig.ECONOMY_GEAR_WEIGHT.get() : stack.getCount();
         final long floor = Exchange.familyValue(item);
@@ -229,7 +226,8 @@ public final class Treasury
         SPENT_TODAY.merge(ColonyAutopilot.colonyKey(colony), items, Long::sum);
         tally(level, colony.getID(), line, items);
         final int perBuck = AutopilotConfig.ECONOMY_ITEMS_PER_BUCK.get();
-        ColonyAutopilot.LOGGER.debug("[{}] the treasury paid {} items — {} bucks and {} items left", colony.getName(), items, left / perBuck, left % perBuck);
+
+        ColonyAutopilot.LOGGER.trace("[{}] the treasury paid {} items — {} bucks and {} items left", colony.getName(), items, left / perBuck, left % perBuck);
         return true;
     }
 
@@ -399,7 +397,7 @@ public final class Treasury
                 return true;
             }
 
-            if (request.getRequest() instanceof Tool || !crafterHeld(manager, entry.getKey()))
+            if (ProvidenceSweep.servedWhoeverHolds(colony, manager, entry.getKey(), request) || !crafterHeld(manager, entry.getKey()))
             {
                 return false;
             }
@@ -445,7 +443,8 @@ public final class Treasury
         return false;
     }
 
-    static void noteWaitingRequest(final IColony colony, final IToken<?> token, final ProvidenceSweep.Category category, final ItemStack stack)
+    static void noteWaitingRequest(final IColony colony, final IToken<?> token, final ProvidenceSweep.Category category, final ItemStack stack,
+      final int smithTier)
     {
         final long price = cost(stack);
 
@@ -453,7 +452,7 @@ public final class Treasury
         final Goal goal = new Goal(stack.getCount() + "x " + stack.getHoverName().getString(), price, good ? 0L : price, good ? stack.getItem() : null,
           "the warehouse");
         WAITING_REQUESTS.computeIfAbsent(ColonyAutopilot.colonyKey(colony), k -> new HashMap<>())
-          .put(token, new Refusal(spendable(colony), category, goal, crafterHeld(colony.getRequestManager(), token)));
+          .put(token, new Refusal(spendable(colony), category, goal, crafterHeld(colony.getRequestManager(), token), stack, smithTier));
     }
 
     static void forgetWaitingBuilds(final IColony colony)

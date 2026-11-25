@@ -60,8 +60,13 @@ public class AutopilotCommands
     {
         event.getDispatcher().register(
           Commands.literal("colonyautopilot")
-            .then(Commands.literal("status").executes(context -> status(context.getSource())))
-            .then(Commands.literal("report").executes(context -> report(context.getSource())))
+
+            .then(Commands.literal("status").executes(context -> status(context.getSource(), null))
+              .then(Commands.argument("id", IntegerArgumentType.integer(1))
+                .executes(context -> status(context.getSource(), IntegerArgumentType.getInteger(context, "id")))))
+            .then(Commands.literal("report").executes(context -> report(context.getSource(), null))
+              .then(Commands.argument("id", IntegerArgumentType.integer(1))
+                .executes(context -> report(context.getSource(), IntegerArgumentType.getInteger(context, "id")))))
             .then(Commands.literal("on").requires(AutopilotCommands::operator).executes(context -> setMaster(context.getSource(), true)))
             .then(Commands.literal("off").requires(AutopilotCommands::operator).executes(context -> setMaster(context.getSource(), false)))
             .then(Commands.literal("expansion").requires(AutopilotCommands::operator)
@@ -90,6 +95,7 @@ public class AutopilotCommands
                 .then(Commands.literal("add")
                   .then(Commands.argument("bucks", IntegerArgumentType.integer(1))
                     .executes(context -> colonyTreasury(context.getSource(), null, IntegerArgumentType.getInteger(context, "bucks"))))))
+
               .then(Commands.argument("id", IntegerArgumentType.integer(1))
                 .then(Commands.literal("settings")
                   .executes(context -> colonySettings(context.getSource(), IntegerArgumentType.getInteger(context, "id"), null))
@@ -164,25 +170,24 @@ public class AutopilotCommands
         return entries.size();
     }
 
-    private static final Pattern STUCK_SPOT = Pattern.compile("stuck around (-?\\d+), (-?\\d+), (-?\\d+)");
+    private static final Pattern STUCK_SPOT = Pattern.compile("stuck around (-?\\d{1,8}), (-?\\d{1,8}), (-?\\d{1,8})");
 
     private static Component withGoto(final String entry)
     {
         final Matcher spot = STUCK_SPOT.matcher(entry);
-        if (!spot.find())
+        while (spot.find())
         {
-            return Component.literal(entry);
+            final BlockPos pos = new BlockPos(Integer.parseInt(spot.group(1)), Integer.parseInt(spot.group(2)), Integer.parseInt(spot.group(3)));
+            if (ProblemLedger.stuckSpot(pos) != null)
+            {
+                final String command = "/colonyautopilot problems goto " + pos.getX() + " " + pos.getY() + " " + pos.getZ();
+                return Component.literal(entry + " ").append(Component.literal("[go there]").withStyle(Style.EMPTY
+                  .withColor(ChatFormatting.AQUA).withUnderlined(true)
+                  .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, command))
+                  .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Component.literal("Teleport to " + pos.toShortString())))));
+            }
         }
-        final BlockPos pos = new BlockPos(Integer.parseInt(spot.group(1)), Integer.parseInt(spot.group(2)), Integer.parseInt(spot.group(3)));
-        if (ProblemLedger.stuckSpot(pos) == null)
-        {
-            return Component.literal(entry);
-        }
-        final String command = "/colonyautopilot problems goto " + pos.getX() + " " + pos.getY() + " " + pos.getZ();
-        return Component.literal(entry + " ").append(Component.literal("[go there]").withStyle(Style.EMPTY
-          .withColor(ChatFormatting.AQUA).withUnderlined(true)
-          .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, command))
-          .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Component.literal("Teleport to " + pos.toShortString())))));
+        return Component.literal(entry);
     }
 
     private static int gotoStuckSpot(final CommandSourceStack source, final BlockPos pos)
@@ -238,7 +243,7 @@ public class AutopilotCommands
         reply(source, Component.literal(enabled
           ? "Colony Autopilot is ON in this world — the villages run themselves again."
           : "Colony Autopilot is OFF in this world — the villages are on their own now (MineColonies rules)."),
-          enabled ? "" : "The guard posts the mod held go back to MineColonies' own hiring; the gamerules and the MineColonies setting it changed go back to what they were.",
+          enabled ? "" : "The guard posts the mod held go back to MineColonies' own hiring; the gamerules and the MineColonies setting it changed go back to what they were. Trap blocks stay a wall to citizens.",
           SAVED_WHERE,
           enabled ? "" : "'/colonyautopilot on' brings it back.");
         ColonyAutopilot.LOGGER.info("Colony Autopilot master switch set to {} in this world by {}", enabled ? "ON" : "OFF", source.getTextName());
@@ -251,8 +256,8 @@ public class AutopilotCommands
         AutopilotConfig.SPEC.save();
         reply(source, Component.literal(enabled
           ? "Expansion resumed — the growth plan continues."
-          : "Expansion halted — no new buildings will be placed."),
-          enabled ? masterCaveat() : "Guard towers still rise where coverage is missing; upgrades, repairs and outfitting continue.",
+          : "Expansion halted — no new buildings of any kind will be placed, guard posts included."),
+          enabled ? masterCaveat() : "Place your own guard posts where buildings stand unguarded; upgrades (while autoupgrade allows), repairs and outfitting continue.",
           ownValuesNote(source, AutopilotConfig.pathOf(AutopilotConfig.EXPANSION_ENABLED)));
         ColonyAutopilot.LOGGER.info("Colony Autopilot expansion set to {} by {}", enabled ? "ON" : "OFF", source.getTextName());
         return 1;
@@ -294,9 +299,7 @@ public class AutopilotCommands
             if (ColonySettings.isOverridden(colony, key))
             {
 
-                names.add(colony.getName() + " (#" + colony.getID()
-                            + (colony.getDimension().equals(source.getLevel().dimension()) ? "" : " in " + colony.getDimension().location())
-                            + ": " + ColonySettings.effective(colony, key) + ")");
+                names.add(colony.getName() + " (" + idOf(source, colony) + ": " + ColonySettings.effective(colony, key) + ")");
             }
         }
         return names;
@@ -368,6 +371,18 @@ public class AutopilotCommands
     private static final String SAVED_WHERE =
       "Saved with this world; your other worlds keep their own switch, and a world never switched follows master.enabled in the server config.";
 
+    private static String absentMods(final String path)
+    {
+        final ColonySettings.Key key = ColonySettings.find(path);
+        if (key == null || key.available())
+        {
+            return "";
+        }
+
+        return "made for " + String.join(", ", key.requires().stream().filter(mod -> !net.neoforged.fml.ModList.get().isLoaded(mod)).sorted().toList())
+                 + ", not installed";
+    }
+
     private static int settings(final CommandSourceStack source, final String section)
     {
         final UnmodifiableConfig spec = AutopilotConfig.SPEC.getSpec();
@@ -389,7 +404,9 @@ public class AutopilotCommands
         if (spec.get(section) instanceof ModConfigSpec.ValueSpec single)
         {
             final Object current = values.get(section) instanceof ModConfigSpec.ConfigValue<?> value ? shown(source, section, value.get()) : "?";
-            source.sendSuccess(() -> keyLine(section, current, ownValuesTag(source, section, false), describe(single)), false);
+            final String absent = absentMods(section);
+            source.sendSuccess(() -> keyLine(section, current, ownValuesTag(source, section, false) + (absent.isEmpty() ? "" : "  [" + absent + "]"),
+              describe(single)), false);
             final String meaning = meaning(single);
             if (!meaning.isEmpty())
             {
@@ -412,10 +429,13 @@ public class AutopilotCommands
             }
             final String path = section + "." + entry.getKey();
             final Object current = values.get(path) instanceof ModConfigSpec.ConfigValue<?> value ? shown(source, path, value.get()) : "?";
-            source.sendSuccess(() -> keyLine(path, current, ownValuesTag(source, path, true), describe(valueSpec)), false);
+            final String absent = absentMods(path);
+            source.sendSuccess(() -> keyLine(path, current, ownValuesTag(source, path, true) + (absent.isEmpty() ? "" : "  [" + absent + "]"),
+              describe(valueSpec)), false);
             shown++;
         }
-        source.sendSuccess(() -> dim("'/colonyautopilot settings <section.key>' says what a key does; the town hall page shows each colony's switches and numbers with their descriptions — lists and text keys live in the file only."), false);
+
+        source.sendSuccess(() -> dim("'/colonyautopilot settings <section.key>' says what a key does; the town hall page shows each colony's switches and numbers with their descriptions — text keys are changed with 'set', lists in the file."), false);
         return shown;
     }
 
@@ -518,8 +538,10 @@ public class AutopilotCommands
         }
         else if (WORLD_TWEAK_KEYS.contains(key))
         {
+
             ColonyAutopilot.applyWorldTweaks(source.getServer());
-            when = "saved and applied" + masterCaveat();
+            final String absent = absentMods(key);
+            when = absent.isEmpty() ? "saved and applied" + masterCaveat() : "saved; " + absent;
         }
         else if ("economy.progressionMode".equals(key) && AutopilotConfig.ECONOMY_PROGRESSION_MODE_LOCKED.get())
         {
@@ -528,7 +550,8 @@ public class AutopilotCommands
         }
         else
         {
-            when = "saved; takes effect on the next pass";
+            final String absent = absentMods(key);
+            when = absent.isEmpty() ? "saved; takes effect on the next pass" : "saved; " + absent;
         }
         reply(source, Component.literal(key).withStyle(ChatFormatting.WHITE).append(dim(": ")).append(value(before))
           .append(dim(" -> ")).append(value(parsed)).append(dim("  (" + when + ")")), ownValuesNote(source, key));
@@ -577,6 +600,11 @@ public class AutopilotCommands
             return "From the console give the colony's id: /colonyautopilot colony <id> " + usage + ".";
         }
         return "No colony here — stand inside one, or give its id: /colonyautopilot colony <id> " + usage + ".";
+    }
+
+    private static String idOf(final CommandSourceStack source, final IColony colony)
+    {
+        return "#" + colony.getID() + (colony.getDimension().equals(source.getLevel().dimension()) ? "" : " in " + colony.getDimension().location());
     }
 
     private static int colonySet(final CommandSourceStack source, final Integer id, final String path, final String value)
@@ -855,10 +883,16 @@ public class AutopilotCommands
         return null;
     }
 
-    private int status(final CommandSourceStack source)
+    private int status(final CommandSourceStack source, final Integer id)
     {
+        final IColony named = id == null ? null : colonyFor(source, id);
+        if (id != null && named == null)
+        {
+            source.sendFailure(Component.literal(noColony(source, id, "")));
+            return 0;
+        }
         source.sendSuccess(() -> Component.literal("Colony Autopilot by " + Maker.NAME), false);
-        final var colonies = IColonyManager.getInstance().getAllColonies();
+        final var colonies = named == null ? IColonyManager.getInstance().getAllColonies() : java.util.List.of(named);
         if (colonies.isEmpty())
         {
             source.sendSuccess(() -> Component.literal("No colonies yet — place a town hall and the autopilot takes it from there."), false);
@@ -877,14 +911,17 @@ public class AutopilotCommands
                 }
             }
             final int citizens = colony.getCitizenManager().getCurrentCitizenCount();
-            final int beds = colony.getCitizenManager().getMaxCitizens();
+            final int beds = GrowthDirector.beds(colony);
             final int researchCap = (int) colony.getCitizenManager().maxCitizensFromResearch();
             final int orders = colony.getWorkManager().getWorkOrders().size();
             final int researching = colony.getResearchManager().getResearchTree().getResearchInProgress().size();
 
-            final String header = "== " + colony.getName() + " ==";
+            final String header = "== " + colony.getName() + " (" + idOf(source, colony) + ") ==";
+
             final String vitals = "citizens " + citizens + "/" + beds + " (research allows " + researchCap + ")"
-                                    + " | buildings " + built + " built, " + (placed - built) + " under way"
+                                    + " | buildings " + built + " built, " + (placed - built) + " not built yet"
+                                    + (placed > built && AutopilotConfig.masterOn() && !AutopilotConfig.buildsPlacedHuts(colony)
+                                         ? " (yours to build: switched off under autoupgrade)" : "")
                                     + " | work orders " + orders
                                     + " | researching " + researching;
             final String growthLine = growth.growthStatus(colony);
@@ -895,9 +932,15 @@ public class AutopilotCommands
         return colonies.size();
     }
 
-    private int report(final CommandSourceStack source)
+    private int report(final CommandSourceStack source, final Integer id)
     {
-        final var colonies = IColonyManager.getInstance().getAllColonies();
+        final IColony named = id == null ? null : colonyFor(source, id);
+        if (id != null && named == null)
+        {
+            source.sendFailure(Component.literal(noColony(source, id, "")));
+            return 0;
+        }
+        final var colonies = named == null ? IColonyManager.getInstance().getAllColonies() : java.util.List.of(named);
         if (colonies.isEmpty())
         {
             source.sendSuccess(() -> Component.literal("No colonies yet — place a town hall and the autopilot takes it from there."), false);
@@ -908,7 +951,7 @@ public class AutopilotCommands
         for (final IColony colony : colonies)
         {
             final int citizens = colony.getCitizenManager().getCurrentCitizenCount();
-            final int beds = colony.getCitizenManager().getMaxCitizens();
+            final int beds = GrowthDirector.beds(colony);
             final int researchCap = (int) colony.getCitizenManager().maxCitizensFromResearch();
 
             int builds = 0;
@@ -930,7 +973,7 @@ public class AutopilotCommands
 
             final int researching = colony.getResearchManager().getResearchTree().getResearchInProgress().size();
 
-            final String header = "== " + colony.getName() + " ==";
+            final String header = "== " + colony.getName() + " (" + idOf(source, colony) + ") ==";
             final String pop = "citizens " + citizens + "/" + beds + " beds (research allows " + researchCap + ")";
             final String plan = growth.growthStatus(colony);
             final String work = "work orders: " + orders + " open (" + builds + " new build" + (builds == 1 ? "" : "s")
@@ -939,7 +982,6 @@ public class AutopilotCommands
                                        + (census.huscarls > 0 ? " / " + census.huscarls + " huscarl" + (census.huscarls == 1 ? "" : "s") : "")
                                        + (archers > 0 ? " / " + archers + " archer" + (archers == 1 ? "" : "s") : "")
                                        + (census.marksmen > 0 ? " / " + census.marksmen + " marksm" + (census.marksmen == 1 ? "an" : "en") : "")
-                                       + (census.gunners > 0 ? " / " + census.gunners + " gunner" + (census.gunners == 1 ? "" : "s") : "")
                                        + " / " + druids + " druid" + (druids == 1 ? "" : "s")
                                        + (census.others > 0 ? " / " + census.others + " other" : "")
                                        + "  (doctrine " + knightsPerArcher + " melee:1 ranged, 1 druid per " + guardsPerDruid + " fighters)";
@@ -1032,7 +1074,7 @@ public class AutopilotCommands
         final ItemStack stack = GuideMeCompat.guideStack();
         if (stack.isEmpty())
         {
-            source.sendFailure(Component.literal("The field guide needs the GuideME mod (Applied Energistics 2 brings it along)."));
+            source.sendFailure(Component.literal("The field guide needs the GuideME mod (packs with Applied Energistics 2 have it: AE2 needs it too)."));
             return 0;
         }
         if (!player.getInventory().add(stack))

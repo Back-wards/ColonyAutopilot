@@ -1,174 +1,109 @@
 ---
 navigation:
   title: The Other Mods
-  position: 75
+  position: 90
 ---
 
 # The Other Mods — a primer
 
-The pack ships more than the colony and the plague. Some of these mods carry their
-own manual (it's in your satchel); the rest have no in-game documentation at all —
-this chapter is their missing quick-start.
+A modpack built round the colony usually ships more than the colony and the
+plague. This chapter is a quick start for the mods Colony Autopilot is most often
+packed with. **This book ships inside Colony Autopilot and cannot see your pack:
+each entry applies only if your pack has that mod.**
 
 **The universal manual is JEI**: hover any item and press **R** to see how it's
 made, **U** to see what it's used for. Every recipe mentioned below is in there.
 
-## Mods with their own book (check your satchel)
+## Books from other mods
 
-* **Applied Energistics 2** — the **Guide** (full-screen, searchable, same engine
-  as this book). Digital storage networks for your own base.
-* **Ars Nouveau** — the **Worn Notebook**. Spellcrafting: build spells from glyphs,
-  cast them from wands and books. The notebook walks you through the Enchanting
-  Apparatus and your first spell.
-* **Mystical Agriculture** — its official **Guide Book** (the quick-start below
-  gets you moving; the book has every detail).
-* All of them bind onto the **Akashic Tome** like this guide does — sneak-right-click.
+The founder's satchel you get on your first join brings the manuals of some of
+these mods, where they are installed: [Getting Started](getting-started.md) lists
+them, and how to bind them into one **Akashic Tome** where that mod is installed.
+Ars Nouveau's **Tattered Tome** teaches spellcrafting: build spells from glyphs,
+cast them from a spell book; the tome walks you through the Enchanting Apparatus
+and your first spell.
 
-## Mystical Agriculture — grow your resources
-
-Its full Guide Book is in your satchel; here is the whole loop in one glance:
-
-1. **Essence crops.** Mine **Prosperity Ore** and **Inferium Ore** (mobs also drop
-   Inferium Essence). Inferium is tier 1 of five essences: **Inferium →
-   Prudentium → Tertium → Imperium → Supremium** — each crafted from the one below.
-2. **The Infusion Altar.** Place it with its eight pedestals (it shows you where).
-   Essence + a base seed + a material = a **resource seed** — iron seeds, diamond
-   seeds, even mob-drop seeds. Plant them like wheat, harvest ingots-in-essence-form.
-3. **Growth Accelerators** go UNDER the farmland and speed everything above them.
-4. **Essence gear.** Essence ingots make tool/armor tiers that you upgrade with
-   **augments** in the Tinkering Table.
-
-⚠ **Pack note:** the colony's janitor treats mob-dropped Inferium Essence as junk
-and voids it from **colony racks and workers' pockets**. Your own chests and
-backpack are never touched — keep your farming stores at home, not in the warehouse.
-
-## Create — the machines
-
-Create has **no book on purpose**: its manual is the **Ponder** system. Hover any
-Create item in your inventory or JEI and **hold W** — an animated in-world scene
-plays showing exactly how it works. Start with a **Water Wheel**, shafts and
-cogwheels, then a Mechanical Press.
-
-In this pack Create also powers:
-
-* **the gun factory** — TaCZ firearms and ammo are crafted in Create machines
-  (sequenced assembly; two bridge mods + the Create Armorer gun pack)
-* **cobblestone generators** — powered cobble/deepslate production for the builders
-* **Crafts & Additions** — electric motors and alternators bridge Create rotation
-  to Mekanism's electricity, both directions
+**Alex's Mobs** hands every new player its own **Animal Dictionary**, with a page
+on each of its creatures.
 
 ## TaCZ — the guns
 
-Craft the **Gun Smith Table**, then browse it (and JEI) for every gun, ammo type
-and attachment — in this pack the recipes run through Create's machines. The
-bottom-right gun HUD is **off by design** (pack choice); your ammo count lives in
-the gun's tooltip and the crosshair still shows reload state.
+TaCZ crafts at three tables: the **Gun Smith Table** for guns, the **Ammo
+Assembly Table** for rounds and the **Attachment Table** for scopes, grips and the
+rest. JEI shows every recipe. Every kind of round needs gunpowder; with
+**Gunpowder Ore** installed, a common ore in the stone of Dripstone Caves and Lush
+Caves (and nowhere else) gives two gunpowder a block to a stone pickaxe or better.
 
-**Guns take enchantments** (this addon's doing). Put a gun in the enchanting
-table like a sword, or add a book at the anvil — attachments and loaded
-ammunition stay on the gun, and re-fitting attachments later keeps the
-enchantments. Guns show no purple glint (TaCZ draws them with its own
-renderer), so check the tooltip. A guard accepts
-only the enchanted gear his tower's level allows, as with every MineColonies
-weapon: each enchantment level above I counts as one tool tier, so a level-1
-tower takes a plain gun and High Caliber IV wants a tower near level 4.
+Your guns take Colony Autopilot's gun enchantments: see
+[Fighting Back](fighting-back.md).
 
-**The militia.** Three melee guards stand for every ranged one, with the druids
-on top. The ranged seat is a **gunner**: the village arms him with a plain
-**AK-47**, ammunition included, and he fires it full-auto. Once the University researches the **Marksman**
-— a crossbow that pierces armour — gunners and marksmen are hired turn about. A
-colony that would rather field bows switches gunners off (**Guns → Gunner guards**
-on the town hall's Autopilot page): the ranged seats go to archers and marksmen,
-and the gunners already standing are moved over on the next daily rebalance. The
-melee seats are knights, and once the **Huscarl** is researched — an axe that cuts
-through armour, but no shield — one in three is a huscarl while the knights hold
-the shield wall. Both researches run ahead of everything else. Archers appear
-only in a colony that has switched gunners off, and only until the Marksman is
-researched. An old world's barracks archers are moved to the doctrine's posts at
-the next daily rebalance (never during a raid); a Guard Tower's archer serves
-until he falls, and a tower whose guard falls is posted afresh, so the towers
-follow the doctrine as the researches land. The schools
-feed the militia: the Archery's pupils graduate into gunner, marksman (or, with
-gunners off, archer) posts, the Combat Academy's into knight and huscarl posts.
+## Fighting
 
-An issued rifle cannot be enchanted — at the table, the anvil or by the colony's
-Enchanter. Outside Progression
-Mode, if graves are on, it dies with its gunner — rounds and all; in Progression Mode,
-where the colony paid for it, it stays in the grave, and a gunner moved off his post
-leaves it in the tower's racks for the next. Every guard post of a tower the
-autopilot staffs reads **Locked (no kids)** in the hire window — MineColonies' label
-for a locked house, the only one it has: that is the autopilot holding the post.
-It seats every guard itself, by MineColonies' own hiring rules (a pupil of the
-post's school first, then a jobless citizen), because MineColonies' own hiring
-knows no doctrine — and once a game day it rebalances the whole mix in one go. To
-post a guard of your own choosing, set one guard post of that Barracks Tower to
-manual (or automatic) hiring first — the autopilot then leaves that whole tower
-to you, and **locks** its other posts so nothing takes the slot. Set your post
-back to default and the autopilot takes the tower back. `/colonyautopilot off`
-(or growth off) hands every held post back to MineColonies' own hiring — run it
-before you remove the mod, or the held posts stay shut.
+* **Better Combat** — melee weapons swing in combos; hold the attack button to
+  keep swinging.
+* **Combat Roll** — a dodge roll on its own key (**Roll** in Controls). It
+  defaults to **R**, the same key TaCZ reloads with: give one of them another key.
+* **Spartan Shields** — a shield and a tower shield for each material, from wood
+  to netherite.
 
-* **High Caliber I–V** — +12% bullet damage per level.
-* **Fungicide I–V** — +25% per level, against spore creatures only. Cannot
-  share a gun with High Caliber. Exists only while Fungal Infection: Spore is
-  installed.
-* **Marksman I–III** — +25% headshot damage per level.
-* **Shrapnel I–III** — every bullet that hits also wounds the nearest hostile
-  mobs within about 2.5 blocks of the target for 10% of that bullet's damage:
-  two of them per level, six at level III — and whatever else the gun's rounds
-  do (the Cryo freeze, the Incendiary fire) lands on them too. The swarm
-  answer. Never harms players, citizens, golems or pets — but it does splash
-  neutral monsters such as endermen and piglins standing in the blast, and
-  they will turn on you.
-* **Cryo Rounds I–II** — a hit freezes the target where it stands for 3
-  seconds (5 at level II), renewed by every round that lands; with Shrapnel the
-  bystanders freeze too. Bosses — the Proto and the other organoids, the
-  calamities, the hyper mini-bosses, the Wither, the dragon, the Warden — and
-  other players are only slowed, and a flyer keeps flying. Your own citizens
-  are never frozen or set alight by a stray round. Cannot share a gun with
-  Incendiary.
-* **Incendiary I–II** — hits set the target on fire, 3 seconds per level.
+## Playing together
 
-The enchantments ride the bullet's own hit. Grenade and rocket rounds (M320,
-RPG-7, the Devastator) carry most of their damage in TaCZ's own blast, which is
-not enchanted: on those only the impact hit changes, and a round that goes off
-against a block touches nothing. Switch: `guns.enchantments` in the server
-config.
+* **Hardcore Revival** — a fatal blow knocks you out instead of killing you. A
+  friend within 3 blocks holds the use key on you for two seconds to get you up,
+  and has two minutes to do it. Lava still kills outright. You come back on half
+  a heart, hungry and weak. The Mutant-Spore-Apocalypse pack switches it off while
+  you play alone.
+* **Simple Voice Chat** — talk to players within 48 blocks, whisper within 24, or
+  open a group. A server needs UDP port 24454 open.
 
-## Mekanism — the tech tree
+## The world
 
-No in-game book (JEI + the online wiki). Start at the **Metallurgic Infuser**,
-grow into factories and ore-processing (double your ingots), power it from Create
-via Crafts & Additions. In this pack it is the endgame tech track — the colony
-never needs it, you might want it.
-
-## Mob Grinding Utils — the mob farm
-
-**Fans** push mobs, the **Mob Masher** kills them (takes looting/sharpness
-upgrades), the **Absorption Hopper** drinks up drops and XP, the **XP Tap** bottles
-it. Build it near a dark room or a dungeon spawner from your explorations.
+Dungeons, temples, towers and taverns (When Dungeons Arise, Dungeons and Taverns,
+Towns and Towers, YUNG's) fill the land. Most of their loot chests hold
+[ColonyBucks](colonybucks.md); village chests hold none, and neither do many of
+Towns and Towers' outpost chests. The colony builds around villages, ruins and other
+structures on the surface instead of over them: see *Growth* in
+[Autopilot Systems](autopilot-features.md). Alex's Mobs and Naturalist add the
+wildlife.
 
 ## Quality of life
 
-* **Sophisticated Backpacks / Storage** — upgradeable backpacks and chests: pickup,
-  magnet, stack and filter upgrades, all in JEI.
+* **Sophisticated Backpacks** — upgradeable backpacks: pickup, magnet, stack and
+  filter upgrades, all in JEI.
 * **Waystones** — craft one, place it, click to activate; teleport between any two
-  you've visited. Villages you find often have one.
-* **Elevators** — same-colored elevator blocks stacked vertically: **jump** to go
-  up, **sneak** to go down.
-* **Corpse** — dying leaves a corpse holding your items. It never despawns; walk
-  back and right-click it. No item-scatter panic.
+  you've visited. Some villages have one, and wild ones stand about every 25
+  chunks. A trip costs experience: about a level per 100 blocks, never more
+  than 27.
+* **Elevators** — elevator blocks stacked in one column, any colour, up to 384
+  blocks apart: **jump** to go up, **sneak** to go down.
+* **Corpse** — dying leaves a corpse holding your items; walk back and
+  right-click it. It never despawns while it holds anything, and anyone can open
+  it: on a shared server, get there first.
+* **Comforts** — a sleeping bag (place it while crouching) sleeps through the
+  night, a hammock (hung between two ropes and nails) through the day.
+* **FTB Ultimine** — hold its key (by default the one left of **1**) while you
+  mine to break up to 64 blocks at once, a whole vein or patch; it costs hunger.
+* **Falling Trees** — break one log of a tree, axe in hand or not, and the whole
+  tree comes down; crouch to take a single block.
+* **Jade** — look at a block or creature to see its name and more.
 * **Xaero's maps** — minimap + full-screen world map, waypoints, automatic death
   markers.
 * **Artifacts / Charm of Undying** — trinkets worn in **Curios** slots (the extra
-  slots in your inventory screen). Artifacts spawn as world loot in campsites and
-  dungeons; a Totem of Undying in the charm slot works without holding it.
+  slots in your inventory screen). Artifacts turn up in loot chests and in
+  underground campsites, whose chest is a mimic about one time in three: hit it
+  before you open it. A Totem of Undying in the charm slot works without holding
+  it.
 
 ## Already covered elsewhere
 
-* **K-Turrets** and the colony's own defenses — [Fighting Back](fighting-back.md)
+* **The militia, the gun enchantments and the colony's own defences** (and
+  K-Turrets, where installed) — [Fighting Back](fighting-back.md)
+* **MineTraps** — its wire, spikes, traps, mines and quicksand are a wall to your
+  citizens and to nobody else; its chest bombs and explosive blocks are not:
+  [What you bring](fighting-back.md#what-you-bring)
 * **Spore & Spore Inquisition** — [The Spore Infection](the-infection.md),
-  [Bestiary](bestiary.md), [Survival Kit](survival-kit.md)
+  [Bestiary](bestiary.md), [Survival Kit](survival-kit.md),
+  [Cleansing Nukes](cleansing-nukes.md), [Offerings & the Finale](offerings.md)
 * **Mutationcraft** — [The Mutants](mutants.md)
 * **MineColonies itself** — the autopilot runs it for you:
   [Autopilot Systems](autopilot-features.md)

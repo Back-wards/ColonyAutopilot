@@ -44,7 +44,6 @@ public class EntityCitizenGraveMixin
 
             return null;
         }
-        ProvidenceSweep.reclaimIssuedKit(citizenData, null);
         return manager.createCitizenGrave(world, pos, citizenData);
     }
 
@@ -56,11 +55,6 @@ public class EntityCitizenGraveMixin
         final ICitizenData dying = ((EntityCitizen) (Object) this).getCitizenData();
         if (!AutopilotConfig.SPEC.isLoaded() || !AutopilotConfig.live(dying == null ? null : dying.getColony(), AutopilotConfig.NO_GRAVES))
         {
-
-            if (dying != null)
-            {
-                ProvidenceSweep.reclaimIssuedKit(dying, null);
-            }
             InventoryUtils.dropItemHandler(handler, world, x, y, z);
         }
     }

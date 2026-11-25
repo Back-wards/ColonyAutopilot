@@ -3,9 +3,13 @@ package com.backwards.colonyautopilot;
 
 import com.minecolonies.api.colony.IColony;
 import com.minecolonies.api.colony.IColonyManager;
+import com.minecolonies.api.colony.buildingextensions.IBuildingExtension;
 import com.minecolonies.api.colony.buildings.IBuilding;
 import com.minecolonies.api.items.component.ColonyId;
+import com.minecolonies.core.colony.buildingextensions.FarmField;
+import com.minecolonies.core.colony.buildingextensions.PlantationField;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.TicketType;
@@ -40,6 +44,8 @@ public class ChunkKeeper
 
     private static final int MARGIN_CHUNKS = 1;
 
+    private static final int FIELD_WALK_BLOCKS = 48;
+
     private static final int MAX_CHUNKS_PER_COLONY = 512;
 
     private record Kept(ServerLevel level, Set<Long> chunks)
@@ -52,12 +58,20 @@ public class ChunkKeeper
 
     private final Set<ColonyId> capWarned = new HashSet<>();
 
+    private static final Set<ColonyId> ticketed = new HashSet<>();
+
+    static boolean holds(final IColony colony)
+    {
+        return ticketed.contains(ColonyAutopilot.colonyKey(colony));
+    }
+
     @SubscribeEvent
     public void onServerStarted(final ServerStartedEvent event)
     {
 
         kept.clear();
         capWarned.clear();
+        ticketed.clear();
     }
 
     @SubscribeEvent
@@ -66,6 +80,7 @@ public class ChunkKeeper
 
         kept.clear();
         capWarned.clear();
+        ticketed.clear();
     }
 
     @SubscribeEvent
@@ -73,6 +88,7 @@ public class ChunkKeeper
     {
         if (!AutopilotConfig.masterOn())
         {
+            ticketed.clear();
             if (!kept.isEmpty())
             {
                 for (final Kept state : kept.values())
@@ -148,6 +164,8 @@ public class ChunkKeeper
         }
         kept.clear();
         kept.putAll(wantedNow);
+        ticketed.clear();
+        ticketed.addAll(live);
         capWarned.retainAll(live);
     }
 
@@ -157,29 +175,67 @@ public class ChunkKeeper
         for (final IBuilding building : colony.getServerBuildingManager().getBuildings().values())
         {
             final Tuple<BlockPos, BlockPos> corners = building.getCorners();
-            final int minChunkX = SectionPos.blockToSectionCoord(corners.getA().getX()) - MARGIN_CHUNKS;
-            final int maxChunkX = SectionPos.blockToSectionCoord(corners.getB().getX()) + MARGIN_CHUNKS;
-            final int minChunkZ = SectionPos.blockToSectionCoord(corners.getA().getZ()) - MARGIN_CHUNKS;
-            final int maxChunkZ = SectionPos.blockToSectionCoord(corners.getB().getZ()) + MARGIN_CHUNKS;
+            keep(colony, wanted, SectionPos.blockToSectionCoord(corners.getA().getX()) - MARGIN_CHUNKS, SectionPos.blockToSectionCoord(corners.getA().getZ()) - MARGIN_CHUNKS,
+              SectionPos.blockToSectionCoord(corners.getB().getX()) + MARGIN_CHUNKS, SectionPos.blockToSectionCoord(corners.getB().getZ()) + MARGIN_CHUNKS);
+        }
 
-            for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++)
+        for (final IBuildingExtension field : colony.getServerBuildingManager().getBuildingExtensions(IBuildingExtension::isTaken))
+        {
+            final BlockPos at = field.getPosition();
+            int minX = at.getX();
+            int minZ = at.getZ();
+            int maxX = at.getX();
+            int maxZ = at.getZ();
+            if (field instanceof FarmField farm)
             {
-                for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++)
+                minX -= farm.getRadius(Direction.WEST);
+                minZ -= farm.getRadius(Direction.NORTH);
+                maxX += farm.getRadius(Direction.EAST);
+                maxZ += farm.getRadius(Direction.SOUTH);
+            }
+            else if (field instanceof PlantationField plantation)
+            {
+                for (final BlockPos work : plantation.getWorkingPositions())
                 {
-                    if (wanted.size() >= MAX_CHUNKS_PER_COLONY)
-                    {
-                        if (capWarned.add(ColonyAutopilot.colonyKey(colony)))
-                        {
-                            ColonyAutopilot.LOGGER.info("[{}] village spans over {} chunks — not keeping more loaded",
-                              colony.getName(), MAX_CHUNKS_PER_COLONY);
-                        }
-                        break;
-                    }
-                    wanted.add(ChunkPos.asLong(chunkX, chunkZ));
+                    minX = Math.min(minX, work.getX() - 1);
+                    minZ = Math.min(minZ, work.getZ() - 1);
+                    maxX = Math.max(maxX, work.getX() + 1);
+                    maxZ = Math.max(maxZ, work.getZ() + 1);
                 }
             }
+
+            final BlockPos hut = field.getBuildingId();
+            if (Math.abs(hut.getX() - at.getX()) <= FIELD_WALK_BLOCKS && Math.abs(hut.getZ() - at.getZ()) <= FIELD_WALK_BLOCKS)
+            {
+                minX = Math.min(minX, hut.getX());
+                minZ = Math.min(minZ, hut.getZ());
+                maxX = Math.max(maxX, hut.getX());
+                maxZ = Math.max(maxZ, hut.getZ());
+            }
+            keep(colony, wanted, SectionPos.blockToSectionCoord(minX), SectionPos.blockToSectionCoord(minZ),
+              SectionPos.blockToSectionCoord(maxX), SectionPos.blockToSectionCoord(maxZ));
         }
         return wanted;
+    }
+
+    private void keep(final IColony colony, final Set<Long> wanted, final int minChunkX, final int minChunkZ, final int maxChunkX, final int maxChunkZ)
+    {
+        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++)
+        {
+            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++)
+            {
+                if (wanted.size() >= MAX_CHUNKS_PER_COLONY)
+                {
+                    if (capWarned.add(ColonyAutopilot.colonyKey(colony)))
+                    {
+                        ColonyAutopilot.LOGGER.info("[{}] village spans over {} chunks — not keeping more loaded",
+                          colony.getName(), MAX_CHUNKS_PER_COLONY);
+                    }
+                    return;
+                }
+                wanted.add(ChunkPos.asLong(chunkX, chunkZ));
+            }
+        }
     }
 
     private static void release(final ServerLevel level, final long chunk)

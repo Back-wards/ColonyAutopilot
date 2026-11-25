@@ -11,6 +11,8 @@ import com.minecolonies.api.colony.buildings.modules.ICraftingBuildingModule;
 import com.minecolonies.api.colony.requestsystem.token.IToken;
 import com.minecolonies.api.crafting.IRecipeStorage;
 import com.minecolonies.api.crafting.ItemStorage;
+import com.minecolonies.api.tileentities.AbstractTileEntityRack;
+import com.minecolonies.api.util.WorldUtil;
 import com.minecolonies.core.colony.buildings.AbstractBuildingGuards;
 import com.minecolonies.core.colony.buildingextensions.PlantationField;
 import com.minecolonies.core.colony.buildings.AbstractBuildingStructureBuilder;
@@ -26,6 +28,7 @@ import com.minecolonies.core.colony.jobs.JobDeliveryman;
 import com.minecolonies.core.colony.jobs.JobNetherWorker;
 import com.minecolonies.core.entity.ai.workers.production.agriculture.EntityAIWorkComposter;
 import com.minecolonies.api.util.ItemStackUtils;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -53,6 +56,7 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -144,7 +148,7 @@ public class WarehouseJanitor
             purgeJunk(colony);
         }
         capEnchantedBooks(colony);
-        final List<IItemHandler> warehouses = new ArrayList<>();
+        final List<Collection<IItemHandler>> warehouses = new ArrayList<>();
         final List<AbstractBuildingStructureBuilder> builderHuts = new ArrayList<>();
         for (final IBuilding building : colony.getServerBuildingManager().getBuildings().values())
         {
@@ -155,11 +159,18 @@ public class WarehouseJanitor
             if (building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutWareHouse)
             {
                 tidyWarehouse(colony, building);
-                final IItemHandler racks = building.getItemHandlerCap();
-                if (racks != null && racks.getSlots() > 0)
+
+                final Set<IItemHandler> racks = new LinkedHashSet<>();
+                for (final BlockPos pos : building.getContainers())
                 {
-                    warehouses.add(racks);
+                    if (!pos.equals(building.getPosition()) && WorldUtil.isBlockLoaded(colony.getWorld(), pos)
+                          && colony.getWorld().getBlockEntity(pos) instanceof AbstractTileEntityRack rack)
+                    {
+                        racks.add(rack.getInventory());
+                    }
                 }
+                racks.add(building.getTileEntity().getInventory());
+                warehouses.add(racks);
             }
             else if (building instanceof AbstractBuildingStructureBuilder builder)
             {
@@ -238,24 +249,22 @@ public class WarehouseJanitor
 
     private static Set<Item> sparedAt(final IBuilding building, final Set<Item> buildNeeded)
     {
+
+        final Set<Item> spared = withCrafterInputs(building, buildNeeded);
         if (building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutComposter)
         {
-            return withCompostables(building, buildNeeded);
-        }
-        if (building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutCrusher)
-        {
-            return withCrafterInputs(building, buildNeeded);
+            return withCompostables(building, spared);
         }
         if (building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutPlantation)
         {
             final BuildingExtensionsModule fields = building.getModule(BuildingExtensionsModule.class);
-            return withPlants(fields == null ? List.of() : fields.getOwnedExtensions(), buildNeeded);
+            return withPlants(fields == null ? List.of() : fields.getOwnedExtensions(), spared);
         }
         if (building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutWareHouse)
         {
-            return withPlants(building.getColony().getServerBuildingManager().getBuildingExtensions(extension -> extension instanceof PlantationField), buildNeeded);
+            return withPlants(building.getColony().getServerBuildingManager().getBuildingExtensions(extension -> extension instanceof PlantationField), spared);
         }
-        return buildNeeded;
+        return spared;
     }
 
     private static Set<Item> withPlants(final Collection<IBuildingExtension> fields, final Set<Item> buildNeeded)
@@ -360,7 +369,7 @@ public class WarehouseJanitor
         return moddedJunk;
     }
 
-    private static void tidyBuilderHut(final IColony colony, final AbstractBuildingStructureBuilder builder, final List<IItemHandler> warehouses)
+    private static void tidyBuilderHut(final IColony colony, final AbstractBuildingStructureBuilder builder, final List<Collection<IItemHandler>> warehouses)
     {
         final IItemHandler racks = builder.getItemHandlerCap();
         if (racks == null || racks.getSlots() == 0)
@@ -368,18 +377,18 @@ public class WarehouseJanitor
             return;
         }
 
-        final Map<Item, Integer> needed = new HashMap<>();
+        final Map<ItemStorage, Integer> needed = new HashMap<>();
         for (final BuildingBuilderResource resource : builder.getNeededResources().values())
         {
-            needed.merge(resource.getItemStack().getItem(), resource.getAmount(), Integer::sum);
+            needed.merge(new ItemStorage(resource.getItemStack()), resource.getAmount(), Integer::sum);
         }
-        final Map<Item, Integer> counts = new HashMap<>();
+        final Map<ItemStorage, Integer> counts = new HashMap<>();
         for (int slot = 0; slot < racks.getSlots(); slot++)
         {
             final ItemStack stack = racks.getStackInSlot(slot);
             if (!stack.isEmpty())
             {
-                counts.merge(stack.getItem(), stack.getCount(), Integer::sum);
+                counts.merge(new ItemStorage(stack), stack.getCount(), Integer::sum);
             }
         }
 
@@ -398,8 +407,9 @@ public class WarehouseJanitor
             {
                 continue;
             }
-            final int floor = needed.getOrDefault(item, 0) + (TRIMMABLE.contains(item) ? HUT_BUFFER : 0);
-            final int excess = Math.min(counts.getOrDefault(item, 0) - floor, stack.getCount());
+            final ItemStorage variant = new ItemStorage(stack);
+            final int floor = needed.getOrDefault(variant, 0) + (TRIMMABLE.contains(item) ? HUT_BUFFER : 0);
+            final int excess = Math.min(counts.getOrDefault(variant, 0) - floor, stack.getCount());
             if (excess <= 0)
             {
                 continue;
@@ -411,31 +421,31 @@ public class WarehouseJanitor
 
                     final int taken = racks.extractItem(slot, excess, false).getCount();
                     trimmed += taken;
-                    counts.merge(item, -taken, Integer::sum);
+                    counts.merge(variant, -taken, Integer::sum);
                 }
                 continue;
             }
 
             final ItemStack outbound = racks.extractItem(slot, excess, false);
             ItemStack left = outbound;
-            for (final IItemHandler warehouse : warehouses)
+            for (final Collection<IItemHandler> warehouse : warehouses)
             {
                 if (left.isEmpty())
                 {
                     break;
                 }
-                left = ItemHandlerHelper.insertItemStacked(warehouse, left, false);
+                left = insertStacked(warehouse, left);
             }
             final int moved = outbound.getCount() - left.getCount();
             shipped += moved;
-            counts.merge(item, -moved, Integer::sum);
+            counts.merge(variant, -moved, Integer::sum);
             if (!left.isEmpty())
             {
                 saturated.add(item);
                 if (TRIMMABLE.contains(item))
                 {
                     trimmed += left.getCount();
-                    counts.merge(item, -left.getCount(), Integer::sum);
+                    counts.merge(variant, -left.getCount(), Integer::sum);
                 }
                 else
                 {
@@ -446,8 +456,31 @@ public class WarehouseJanitor
         if (shipped > 0 || trimmed > 0)
         {
             ColonyAutopilot.LOGGER.debug("[{}] janitor cleared the {} at {}: {} items shipped to the warehouse, {} rubble burned",
-              colony.getName(), builder.getBuildingDisplayName(), builder.getPosition().toShortString(), shipped, trimmed);
+              colony.getName(), SiteSelector.plainName(builder), builder.getPosition().toShortString(), shipped, trimmed);
         }
+    }
+
+    private static ItemStack insertStacked(final Collection<IItemHandler> racks, ItemStack stack)
+    {
+        for (int pass = 0; pass < 2; pass++)
+        {
+            for (final IItemHandler rack : racks)
+            {
+                for (int slot = 0; slot < rack.getSlots(); slot++)
+                {
+                    final ItemStack inSlot = rack.getStackInSlot(slot);
+                    if (pass == 0 ? ItemStack.isSameItemSameComponents(inSlot, stack) : inSlot.isEmpty())
+                    {
+                        stack = rack.insertItem(slot, stack, false);
+                        if (stack.isEmpty())
+                        {
+                            return stack;
+                        }
+                    }
+                }
+            }
+        }
+        return stack;
     }
 
     private static void tidyWarehouse(final IColony colony, final IBuilding building)
@@ -458,17 +491,23 @@ public class WarehouseJanitor
             return;
         }
 
-        final Map<Item, Integer> buildNeeds = new HashMap<>();
+        final Map<ItemStorage, Integer> buildNeeds = new HashMap<>();
+
+        final Map<Item, Integer> itemNeeds = new HashMap<>();
         for (final IBuilding other : colony.getServerBuildingManager().getBuildings().values())
         {
             if (other instanceof AbstractBuildingStructureBuilder builder)
             {
                 for (final BuildingBuilderResource resource : builder.getNeededResources().values())
                 {
-                    buildNeeds.merge(resource.getItemStack().getItem(), resource.getAmount(), Integer::sum);
+                    buildNeeds.merge(new ItemStorage(resource.getItemStack()), resource.getAmount(), Integer::sum);
+                    itemNeeds.merge(resource.getItemStack().getItem(), resource.getAmount(), Integer::sum);
                 }
             }
         }
+
+        final Map<ItemStorage, Integer> listedHeld = new HashMap<>();
+        buildNeeds.keySet().forEach(variant -> listedHeld.put(variant, 0));
         final Set<String> keptForBuilds = new TreeSet<>();
 
         final List<Map.Entry<Predicate<ItemStack>, Integer>> floors = new ArrayList<>();
@@ -485,6 +524,7 @@ public class WarehouseJanitor
             if (!stack.isEmpty() && capped(stack, goodsKept))
             {
                 counts.merge(potionAwareKey(stack), stack.getCount(), Integer::sum);
+                listedHeld.computeIfPresent(new ItemStorage(stack), (variant, held) -> held + stack.getCount());
             }
         }
 
@@ -520,20 +560,38 @@ public class WarehouseJanitor
             }
             final Object key = potionAwareKey(stack);
             final int held = counts.getOrDefault(key, 0);
-            final int needed = buildNeeds.getOrDefault(stack.getItem(), 0);
-            if (needed > cap)
+
+            final int itemNeeded = itemNeeds.getOrDefault(stack.getItem(), 0);
+            if (itemNeeded > cap)
             {
                 if (held > cap)
                 {
                     keptForBuilds.add(stack.getHoverName().getString());
                 }
-                cap = needed;
+                cap = itemNeeded;
             }
-            if (held > cap)
+            if (held <= cap)
             {
-                final int take = Math.min(held - cap, stack.getCount());
+                continue;
+            }
+            int take = Math.min(held - cap, stack.getCount());
+
+            final ItemStorage variant = new ItemStorage(stack);
+            final Integer needed = buildNeeds.get(variant);
+            if (needed != null)
+            {
+                final int spare = Math.max(0, listedHeld.get(variant) - needed);
+                if (spare < take)
+                {
+                    keptForBuilds.add(stack.getHoverName().getString());
+                    take = spare;
+                }
+            }
+            if (take > 0)
+            {
                 final int taken = racks.extractItem(slot, take, false).getCount();
                 counts.merge(key, -taken, Integer::sum);
+                listedHeld.computeIfPresent(variant, (listed, left) -> left - taken);
                 trimmed += taken;
             }
         }

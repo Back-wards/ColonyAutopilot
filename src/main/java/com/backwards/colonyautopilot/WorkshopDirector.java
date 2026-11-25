@@ -33,6 +33,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
+import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 import java.util.ArrayList;
@@ -80,6 +81,16 @@ public class WorkshopDirector
         craftableIndex = null;
         refusedLessonsLogged.clear();
         fullyTaughtAt.clear();
+    }
+
+    @SubscribeEvent
+    public void onServerStopping(final ServerStoppingEvent event)
+    {
+
+        fullyTaughtAt.clear();
+        lessons = null;
+        masterLessons = null;
+        craftableIndex = null;
     }
 
     boolean teachCrafterFor(final IColony colony, final ItemStack wanted)
@@ -153,6 +164,12 @@ public class WorkshopDirector
         {
             return false;
         }
+
+        if (result.getCount() > 1 && inputs.stream().anyMatch(input -> craftableIndex.get(input.getItem()) instanceof RecipeHolder<CraftingRecipe> packing
+              && packing.value().getIngredients().stream().anyMatch(ingredient -> ingredient.test(wanted))))
+        {
+            return false;
+        }
         final IRecipeStorage storage = grid(result, inputs.toArray(new ItemStack[0]));
         final IToken<?> token = IColonyManager.getInstance().getRecipeManager().checkOrAddRecipe(storage);
         for (final IBuilding building : colony.getServerBuildingManager().getBuildings().values())
@@ -178,7 +195,7 @@ public class WorkshopDirector
                 {
                     building.markDirty();
                     ColonyAutopilot.LOGGER.info("[{}] a stranded request taught the {} to craft {} — production replaces providence",
-                      colony.getName(), building.getBuildingDisplayName(), wanted.getHoverName().getString());
+                      colony.getName(), SiteSelector.plainName(building), wanted.getHoverName().getString());
                     return true;
                 }
             }
@@ -336,22 +353,8 @@ public class WorkshopDirector
         {
 
             seeded = 0;
-            boolean stockedBefore = false;
-            for (final net.minecraft.world.item.Item staple : staples)
-            {
-                stockedBefore |= module.isStocked(new ItemStack(staple));
-            }
-            if (stockedBefore)
-            {
-                for (int i = 0; i < staples.length; i++)
-                {
-                    if (module.isStocked(new ItemStack(staples[i])) || i < 5 * warehouse.getBuildingLevel())
-                    {
-                        seeded |= 1 << i;
-                    }
-                }
-            }
         }
+        boolean added = false;
         for (int i = 0; i < staples.length; i++)
         {
             if ((seeded & (1 << i)) != 0)
@@ -362,6 +365,7 @@ public class WorkshopDirector
             if (!module.isStocked(stack))
             {
                 module.addMinimumStock(stack, stacks[i]);
+                added |= module.isStocked(stack);
             }
             if (module.isStocked(stack))
             {
@@ -371,8 +375,11 @@ public class WorkshopDirector
         }
         grounds.setWarehouseSeeded(colony.getID(), warehouse.getPosition(), seeded);
         grounds.setWarehouseStockLevel(colony.getID(), warehouse.getPosition(), warehouse.getBuildingLevel());
-        ColonyAutopilot.LOGGER.info("[{}] warehouse standing stock set — the workshops produce the staples they can make",
-          colony.getName());
+        if (added)
+        {
+            ColonyAutopilot.LOGGER.info("[{}] warehouse standing stock set — the workshops produce the staples they can make",
+              colony.getName());
+        }
     }
 
     private void wakeCrusher(final IColony colony, final IBuilding crusher)
@@ -414,7 +421,7 @@ public class WorkshopDirector
                     module.addItem(item);
                 }
                 ColonyAutopilot.LOGGER.info("[{}] filled the {}'s {} list ({} items)",
-                  colony.getName(), building.getBuildingDisplayName(), what, candidates.size());
+                  colony.getName(), SiteSelector.plainName(building), what, candidates.size());
             }
         }
     }
@@ -483,14 +490,14 @@ public class WorkshopDirector
                 if (refusedLessonsLogged.computeIfAbsent(ColonyAutopilot.colonyKey(colony), k -> new HashSet<>()).add(lessonKey))
                 {
                     ColonyAutopilot.LOGGER.debug("[{}] the {} did not accept a lesson for {} — retried quietly until it can",
-                      colony.getName(), building.getBuildingDisplayName(), storage.getPrimaryOutput().getHoverName().getString());
+                      colony.getName(), SiteSelector.plainName(building), storage.getPrimaryOutput().getHoverName().getString());
                 }
             }
         }
         if (taught > 0)
         {
             building.markDirty();
-            ColonyAutopilot.LOGGER.info("[{}] taught the {} {} recipe(s)", colony.getName(), building.getBuildingDisplayName(), taught);
+            ColonyAutopilot.LOGGER.info("[{}] taught the {} {} recipe(s)", colony.getName(), SiteSelector.plainName(building), taught);
         }
         if (allLanded)
         {

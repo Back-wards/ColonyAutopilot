@@ -46,15 +46,6 @@ public class Milestones
         broadcast(colony, named(colony, Component.translatable(key, args)));
     }
 
-    static void say(final IColony colony, final Component message)
-    {
-        if (!AutopilotConfig.live(colony, AutopilotConfig.MILESTONES_ENABLED))
-        {
-            return;
-        }
-        broadcast(colony, named(colony, message));
-    }
-
     private static Component named(final IColony colony, final Component message)
     {
         return Component.literal("[" + colony.getName() + "] ").withStyle(message.getStyle()).append(message);
@@ -320,33 +311,35 @@ public class Milestones
 
         final boolean news = AutopilotConfig.masterOn();
         final Set<ColonyId> live = new HashSet<>();
-        IColony pushVia = null;
         for (final IColony colony : IColonyManager.getInstance().getAllColonies())
         {
-            if (pushVia == null)
-            {
-                pushVia = colony;
-            }
             final ColonyId key = ColonyAutopilot.colonyKey(colony);
             live.add(key);
-            if (news)
+            try
             {
-                economyNotices(colony, key);
+                if (news)
+                {
+                    economyNotices(colony, key);
+                }
+                if (!news || !AutopilotConfig.get(colony, AutopilotConfig.MILESTONES_ENABLED))
+                {
+                    continue;
+                }
+                final int count = colony.getCitizenManager().getCurrentCitizenCount();
+                final Integer last = lastAnnouncedPopulation.get(key);
+                if (last == null)
+                {
+                    lastAnnouncedPopulation.put(key, count);
+                }
+                else if (count >= last + POPULATION_STEP)
+                {
+                    lastAnnouncedPopulation.put(key, count);
+                    say(colony, "colonyautopilot.milestone.population", count);
+                }
             }
-            if (!news || !AutopilotConfig.get(colony, AutopilotConfig.MILESTONES_ENABLED))
+            catch (final Exception e)
             {
-                continue;
-            }
-            final int count = colony.getCitizenManager().getCurrentCitizenCount();
-            final Integer last = lastAnnouncedPopulation.get(key);
-            if (last == null)
-            {
-                lastAnnouncedPopulation.put(key, count);
-            }
-            else if (count >= last + POPULATION_STEP)
-            {
-                lastAnnouncedPopulation.put(key, count);
-                say(colony, "colonyautopilot.milestone.population", count);
+                ColonyAutopilot.LOGGER.warn("Milestones failed for colony {}", colony.getName(), e);
             }
         }
         ColonyAutopilot.retainColonies(live, lastAnnouncedPopulation);
@@ -362,13 +355,18 @@ public class Milestones
         {
             problemPushCooldown--;
         }
-        else if (pushVia != null && AutopilotConfig.live(AutopilotConfig.PROBLEM_CHAT) && AutopilotConfig.MILESTONES_ENABLED.get())
+        else if (!live.isEmpty() && AutopilotConfig.live(AutopilotConfig.PROBLEM_CHAT) && AutopilotConfig.MILESTONES_ENABLED.get()
+                   && !event.getServer().getPlayerList().getPlayers().isEmpty())
         {
             final int fresh = ProblemLedger.drainNewProblems();
             if (fresh > 0)
             {
 
-                broadcast(pushVia, Component.translatable("colonyautopilot.problem.push", fresh));
+                final Component push = Component.translatable("colonyautopilot.problem.push", fresh);
+                for (final ServerPlayer online : event.getServer().getPlayerList().getPlayers())
+                {
+                    online.sendSystemMessage(push);
+                }
                 problemPushCooldown = PROBLEM_PUSH_COOLDOWN_PASSES;
             }
         }

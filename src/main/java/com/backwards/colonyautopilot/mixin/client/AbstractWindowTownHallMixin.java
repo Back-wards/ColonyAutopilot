@@ -13,7 +13,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(AbstractWindowTownHall.class)
 public abstract class AbstractWindowTownHallMixin
 {
-    @Inject(method = "<init>", at = @At("TAIL"), require = 0)
+    @Inject(method = "<init>(Lcom/minecolonies/core/colony/buildings/workerbuildings/BuildingTownHall$View;Ljava/lang/String;)V", at = @At("TAIL"), require = 0)
     private void colonyautopilot$addExchangeBookmark(final BuildingTownHall.View townHall, final String page, final CallbackInfo ci)
     {
         if (!((Object) this instanceof ExchangeWindow))

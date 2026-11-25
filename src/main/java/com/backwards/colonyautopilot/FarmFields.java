@@ -7,10 +7,13 @@ import com.minecolonies.api.colony.buildingextensions.registry.BuildingExtension
 import com.minecolonies.api.colony.buildings.IBuilding;
 import com.minecolonies.api.util.WorldUtil;
 import com.minecolonies.core.blocks.BlockScarecrow;
+import com.minecolonies.core.blocks.MinecoloniesCropBlock;
+import com.minecolonies.core.blocks.MinecoloniesFarmland;
 import com.minecolonies.core.colony.buildingextensions.FarmField;
 import com.minecolonies.core.colony.buildings.modules.BuildingExtensionsModule;
 import com.minecolonies.core.colony.buildings.modules.MinimumStockModule;
 import com.minecolonies.api.blocks.ModBlocks;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.GlobalPos;
@@ -22,6 +25,7 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.AttachedStemBlock;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.CropBlock;
+import net.minecraft.world.level.block.FarmBlock;
 import net.minecraft.world.level.block.LiquidBlock;
 import net.minecraft.world.level.block.StemBlock;
 import net.minecraft.world.level.block.state.BlockState;
@@ -48,6 +52,8 @@ final class FarmFields
     private static final int FIELD_RADIUS = 5;
 
     private static final int FIELD_REACH = 48;
+
+    private static final int FIELD_DROP = 1;
 
     private static final int CARVE_CEILING = 12;
 
@@ -152,18 +158,31 @@ final class FarmFields
                 waiting.setSeed(adoptedCrop);
                 module.assignExtension(waiting);
                 ColonyAutopilot.LOGGER.info("[{}] seeded the waiting field at {} with {} for the {}",
-                  colony.getName(), waiting.getPosition().toShortString(), adoptedCrop.getHoverName().getString(), farm.getBuildingDisplayName());
+                  colony.getName(), waiting.getPosition().toShortString(), adoptedCrop.getHoverName().getString(), SiteSelector.plainName(farm));
             }
             unclaimed++;
         }
         if (owned + unclaimed >= farm.getBuildingLevel())
         {
             ColonyAutopilot.LOGGER.debug("[{}] the {} is field-covered ({} owned, {} unclaimed, level {})",
-              colony.getName(), farm.getBuildingDisplayName(), owned, unclaimed, farm.getBuildingLevel());
+              colony.getName(), SiteSelector.plainName(farm), owned, unclaimed, farm.getBuildingLevel());
             return;
         }
 
-        final FieldSurvey survey = surveyFieldPlots(level, colony, farm.getPosition(), obstacles, roadBand, false);
+        final boolean lineKnown = ColonyGrounds.get(level).hasAnchorOffset(colony.getID(), farm.getPosition());
+        FieldSurvey survey = surveyFieldPlots(level, colony, farm.getPosition(), obstacles, roadBand, false, !lineKnown, null);
+        if (!lineKnown)
+        {
+            ColonyAutopilot.LOGGER.debug("[{}] the {}'s ground line is not on record yet — its field is surveyed with no limit below the farm",
+              colony.getName(), SiteSelector.plainName(farm));
+        }
+        else if (survey.natural() == null && survey.forced() == null)
+        {
+
+            ColonyAutopilot.LOGGER.debug("[{}] no plot for a field at the {}'s own level in reach — surveyed again with no limit below the farm",
+              colony.getName(), SiteSelector.plainName(farm));
+            survey = surveyFieldPlots(level, colony, farm.getPosition(), obstacles, roadBand, false, true, null);
+        }
         BlockPos plot = survey.natural();
         boolean forcedCarve = false;
         if (plot == null)
@@ -171,7 +190,7 @@ final class FarmFields
             if (survey.forced() == null)
             {
                 ColonyAutopilot.LOGGER.info("[{}] no claimed ground clear of buildings and roads near the {} for a field yet — looking again tomorrow",
-                  colony.getName(), farm.getBuildingDisplayName());
+                  colony.getName(), SiteSelector.plainName(farm));
                 return;
             }
 
@@ -185,7 +204,7 @@ final class FarmFields
       final Set<Long> roadBand)
     {
         final BuildingExtensionsModule module = farm.getModule(BuildingExtensionsModule.class);
-        final BlockPos plot = module == null ? null : surveyFieldPlots(level, colony, farm.getPosition(), obstacles, roadBand, false).natural();
+        final BlockPos plot = module == null ? null : surveyFieldPlots(level, colony, farm.getPosition(), obstacles, roadBand, false, false, null).natural();
         if (plot != null)
         {
             layField(level, colony, farm, module, plot, false);
@@ -218,9 +237,9 @@ final class FarmFields
         }
 
         ColonyAutopilot.LOGGER.info(forcedCarve
-            ? "[{}] force-carved a {} field for the {} at {} — no natural ground, so the colony made one (last-resort carve){}"
+            ? "[{}] force-carved a {} field for the {} at {} — no natural ground at the farm's own level, so the colony made one (last-resort carve){}"
             : "[{}] laid out a {} field for the {} at {}{}",
-          colony.getName(), crop.getHoverName().getString(), farm.getBuildingDisplayName(), base.toShortString(),
+          colony.getName(), crop.getHoverName().getString(), SiteSelector.plainName(farm), base.toShortString(),
           farm.getBuildingLevel() > 0 ? "" : " — its natural plot, laid as the farm is placed");
         Milestones.say(colony, "colonyautopilot.milestone.field", crop.getHoverName().getString());
     }
@@ -259,8 +278,9 @@ final class FarmFields
                         continue;
                     }
                     final BlockState planted = level.getBlockState(probe.set(x, cropY, z));
-                    if (planted.is(BlockTags.CROPS)
-                          && !(planted.getBlock() instanceof CropBlock crop && crop.isMaxAge(planted)))
+
+                    if (planted.getBlock() instanceof MinecoloniesCropBlock own ? !own.isMaxAge(planted)
+                          : planted.is(BlockTags.CROPS) && !(planted.getBlock() instanceof CropBlock crop && crop.isMaxAge(planted)))
                     {
                         return true;
                     }
@@ -319,7 +339,7 @@ final class FarmFields
             final List<SiteSelector.Footprint> nearShields = new ArrayList<>();
             for (final SiteSelector.Footprint box : shields)
             {
-                if (box.intersects(minX - 8, minZ - 8, maxX + 8, maxZ + 8))
+                if (box.intersects(minX, minZ, maxX, maxZ))
                 {
                     nearShields.add(box);
                 }
@@ -340,9 +360,14 @@ final class FarmFields
                         healthy++;
                         continue;
                     }
-                    repaired += repairCell(level, x, planeY, z, nearShields, probe);
+                    repaired += repairCell(level, x, planeY, z, nearShields, shields, probe);
                     final BlockState plane = level.getBlockState(probe.set(x, planeY, z));
-                    if (!plane.getFluidState().isEmpty())
+                    if (farmable(plane))
+                    {
+
+                        healthy++;
+                    }
+                    else if (!plane.getFluidState().isEmpty())
                     {
 
                         if (Math.abs(x - scarecrow.getX()) != 3 || Math.abs(z - scarecrow.getZ()) != 3)
@@ -350,11 +375,7 @@ final class FarmFields
                             flooded++;
                         }
                     }
-                    else if (plane.is(BlockTags.DIRT) || plane.is(Blocks.FARMLAND))
-                    {
-                        healthy++;
-                    }
-                    else if (shielded(x, z, nearShields))
+                    else if (SiteSelector.insideAny(nearShields, x, z))
                     {
 
                         shieldedDead++;
@@ -367,13 +388,13 @@ final class FarmFields
             {
                 repaired += wells;
                 ColonyAutopilot.LOGGER.debug("[{}] carved {} water wells into the {}'s field at {} — dry farmland unravels faster than the farmer can plant it",
-                  colony.getName(), wells, farm.getBuildingDisplayName(), scarecrow.toShortString());
+                  colony.getName(), wells, SiteSelector.plainName(farm), scarecrow.toShortString());
             }
             stockSeed(farm, field.getSeed());
             if (repaired > 0)
             {
                 ColonyAutopilot.LOGGER.info("[{}] repaired {} blocks of the {}'s field at {} — flooded or broken ground made whole",
-                  colony.getName(), repaired, farm.getBuildingDisplayName(), scarecrow.toShortString());
+                  colony.getName(), repaired, SiteSelector.plainName(farm), scarecrow.toShortString());
             }
             final GlobalPos fieldKey = GlobalPos.of(level.dimension(), scarecrow.immutable());
             if (healthy * 10 >= cells * 7)
@@ -441,7 +462,7 @@ final class FarmFields
             {
                 continue;
             }
-            if (!state.is(BlockTags.DIRT) && !state.is(Blocks.FARMLAND) && !state.isAir() && !state.canBeReplaced())
+            if (!farmable(state) && !state.isAir() && !state.canBeReplaced())
             {
                 continue;
             }
@@ -472,11 +493,11 @@ final class FarmFields
     }
 
     private static int repairCell(final ServerLevel level, final int x, final int planeY, final int z,
-      final List<SiteSelector.Footprint> shields, final BlockPos.MutableBlockPos pos)
+      final List<SiteSelector.Footprint> shields, final List<SiteSelector.Footprint> fellShields, final BlockPos.MutableBlockPos pos)
     {
         int edits = 0;
 
-        final boolean cellShielded = shielded(x, z, shields);
+        final boolean cellShielded = SiteSelector.insideAny(shields, x, z);
 
         if (!cellShielded)
         {
@@ -485,7 +506,7 @@ final class FarmFields
                 if (level.getBlockState(pos.set(x, y, z)).is(BlockTags.LOGS))
                 {
 
-                    if (VillagePaths.fellTree(level, pos.immutable(), shields, false))
+                    if (VillagePaths.fellTree(level, pos.immutable(), fellShields, false))
                     {
                         edits++;
                     }
@@ -495,7 +516,7 @@ final class FarmFields
         }
 
         final BlockState state = level.getBlockState(pos.set(x, planeY, z));
-        if (!cellShielded && !state.hasBlockEntity() && state.getFluidState().isEmpty() && !state.is(BlockTags.DIRT) && !state.is(Blocks.FARMLAND))
+        if (!cellShielded && !state.hasBlockEntity() && state.getFluidState().isEmpty() && !farmable(state))
         {
             WorldUtil.setBlockState(level, pos.set(x, planeY, z), Blocks.DIRT.defaultBlockState());
             edits++;
@@ -526,7 +547,7 @@ final class FarmFields
                     continue;
                 }
                 if (above.canBeReplaced()
-                      || above.is(BlockTags.CROPS) || above.getBlock() instanceof CropBlock
+                      || above.is(BlockTags.CROPS) || above.getBlock() instanceof CropBlock || above.getBlock() instanceof MinecoloniesCropBlock
                       || above.getBlock() instanceof StemBlock || above.getBlock() instanceof AttachedStemBlock
                       || above.is(Blocks.PUMPKIN) || above.is(Blocks.MELON))
                 {
@@ -539,16 +560,9 @@ final class FarmFields
         return edits;
     }
 
-    private static boolean shielded(final int x, final int z, final List<SiteSelector.Footprint> shields)
+    private static boolean farmable(final BlockState state)
     {
-        for (final SiteSelector.Footprint box : shields)
-        {
-            if (box.intersects(x, z, x, z))
-            {
-                return true;
-            }
-        }
-        return false;
+        return state.is(BlockTags.DIRT) || state.getBlock() instanceof FarmBlock || state.getBlock() instanceof MinecoloniesFarmland;
     }
 
     private record FieldSurvey(BlockPos natural, BlockPos forced)
@@ -556,9 +570,34 @@ final class FarmFields
     }
 
     static BlockPos naturalFieldPlot(final ServerLevel level, final IColony colony, final BlockPos hut, final List<SiteSelector.Footprint> obstacles,
-      final Set<Long> roadBand)
+      final Set<Long> roadBand, final Long2ObjectMap<SurveyedCentre> centres)
     {
-        return surveyFieldPlots(level, colony, hut, obstacles, roadBand, true).natural();
+        return surveyFieldPlots(level, colony, hut, obstacles, roadBand, true, false, centres).natural();
+    }
+
+    static final class SurveyedCentre
+    {
+        private Boolean onRoad;
+
+        private BlockPos ground;
+        private boolean ours;
+
+        private Integer dirtCells;
+        private Boolean flooded;
+
+        private boolean floods(final ServerLevel level)
+        {
+            if (flooded == null)
+            {
+                flooded = FarmFields.floods(level, ground.getX(), ground.getZ(), ground.getY());
+            }
+            return flooded;
+        }
+
+        private boolean noNaturalPlot()
+        {
+            return (ground != null && !ours) || (dirtCells != null && (dirtCells < NATURAL_CELLS || Boolean.TRUE.equals(flooded)));
+        }
     }
 
     private static final int NATURAL_CELLS = 85;
@@ -584,8 +623,10 @@ final class FarmFields
     }
 
     private static FieldSurvey surveyFieldPlots(final ServerLevel level, final IColony colony, final BlockPos anchor, final List<SiteSelector.Footprint> obstacles,
-      final Set<Long> roadBand, final boolean anyNatural)
+      final Set<Long> roadBand, final boolean anyNatural, final boolean sunkToo, final Long2ObjectMap<SurveyedCentre> centres)
     {
+
+        final int farmGround = anchor.getY() - ColonyGrounds.get(level).anchorOffset(colony.getID(), anchor, 1);
         BlockPos naturalBest = null;
         int naturalScore = 0;
         BlockPos forcedBest = null;
@@ -606,6 +647,13 @@ final class FarmFields
             final int cx = anchor.getX() + offset[0];
             final int cz = anchor.getZ() + offset[1];
 
+            final long centreKey = BlockPos.asLong(cx, 0, cz);
+            final SurveyedCentre known = centres == null ? null : centres.get(centreKey);
+            if (known != null && (Boolean.TRUE.equals(known.onRoad) || (anyNatural && known.noNaturalPlot())))
+            {
+                continue;
+            }
+
             boolean boxed = false;
             for (final SiteSelector.Footprint box : obstacles)
             {
@@ -616,7 +664,21 @@ final class FarmFields
                     break;
                 }
             }
-            if (boxed || onRoad(cx, cz, roadBand))
+            if (boxed)
+            {
+                continue;
+            }
+
+            final SurveyedCentre seen = known != null ? known : new SurveyedCentre();
+            if (known == null && centres != null)
+            {
+                centres.put(centreKey, seen);
+            }
+            if (seen.onRoad == null)
+            {
+                seen.onRoad = onRoad(cx, cz, roadBand);
+            }
+            if (seen.onRoad || (anyNatural && seen.noNaturalPlot()))
             {
                 continue;
             }
@@ -628,45 +690,37 @@ final class FarmFields
             {
                 continue;
             }
-            final BlockPos ground = new BlockPos(cx, SiteSelector.groundHeight(level, cx, cz) - 1, cz);
-            if (!colony.isCoordInColony(level, ground))
+            if (seen.ground == null)
+            {
+                seen.ground = new BlockPos(cx, SiteSelector.groundHeight(level, cx, cz) - 1, cz);
+
+                seen.ours = colony.isCoordInColony(level, seen.ground)
+                              && SiteSelector.foreignClaims(level, colony, cx - FIELD_RADIUS, cz - FIELD_RADIUS, cx + FIELD_RADIUS, cz + FIELD_RADIUS).isEmpty();
+            }
+            if (!seen.ours)
             {
                 continue;
             }
+            final BlockPos ground = seen.ground;
             if (ground.getY() > anchor.getY() + 12)
             {
                 continue;
+            }
+            if (!sunkToo && ground.getY() < farmGround - FIELD_DROP)
+            {
+                continue;
 
             }
-            if (level.getHeight(Heightmap.Types.MOTION_BLOCKING, cx, cz) - 1 > ground.getY())
+            if (seen.dirtCells == null)
+            {
+                seen.dirtCells = dirtCells(level, ground);
+            }
+            final int score = seen.dirtCells;
+            if (score < 0)
             {
                 continue;
             }
-            if (!level.getBlockState(ground.above()).canBeReplaced()
-                  || !level.getBlockState(ground.above(2)).canBeReplaced()
-                  || level.getBlockState(ground).is(ModBlocks.blockScarecrow))
-            {
-                continue;
-            }
-
-            int score = 0;
-            int dead = 0;
-            count:
-            for (int dx = -FIELD_RADIUS; dx <= FIELD_RADIUS; dx++)
-            {
-                for (int dz = -FIELD_RADIUS; dz <= FIELD_RADIUS; dz++)
-                {
-                    if (level.getBlockState(ground.offset(dx, 0, dz)).is(BlockTags.DIRT))
-                    {
-                        score++;
-                    }
-                    else if (++dead > (2 * FIELD_RADIUS + 1) * (2 * FIELD_RADIUS + 1) - NATURAL_CELLS)
-                    {
-                        break count;
-                    }
-                }
-            }
-            if (score > naturalScore && (score < NATURAL_CELLS || !floods(level, cx, cz, ground.getY())))
+            if (score > naturalScore && (score < NATURAL_CELLS || !seen.floods(level)))
             {
                 naturalScore = score;
                 naturalBest = ground;
@@ -698,7 +752,7 @@ final class FarmFields
             }
 
             final int spread = (maxH - minH) + wet * 50;
-            if (spread < forcedSpread && !floods(level, cx, cz, ground.getY()))
+            if (spread < forcedSpread && !seen.floods(level))
             {
                 forcedSpread = spread;
                 forcedBest = ground;
@@ -706,6 +760,34 @@ final class FarmFields
         }
         final BlockPos natural = naturalScore >= NATURAL_CELLS ? naturalBest : null;
         return new FieldSurvey(natural, forcedBest);
+    }
+
+    private static int dirtCells(final ServerLevel level, final BlockPos ground)
+    {
+        if (level.getHeight(Heightmap.Types.MOTION_BLOCKING, ground.getX(), ground.getZ()) - 1 > ground.getY()
+              || !level.getBlockState(ground.above()).canBeReplaced()
+              || !level.getBlockState(ground.above(2)).canBeReplaced()
+              || level.getBlockState(ground).is(ModBlocks.blockScarecrow))
+        {
+            return -1;
+        }
+        int score = 0;
+        int dead = 0;
+        for (int dx = -FIELD_RADIUS; dx <= FIELD_RADIUS; dx++)
+        {
+            for (int dz = -FIELD_RADIUS; dz <= FIELD_RADIUS; dz++)
+            {
+                if (level.getBlockState(ground.offset(dx, 0, dz)).is(BlockTags.DIRT))
+                {
+                    score++;
+                }
+                else if (++dead > (2 * FIELD_RADIUS + 1) * (2 * FIELD_RADIUS + 1) - NATURAL_CELLS)
+                {
+                    return score;
+                }
+            }
+        }
+        return score;
     }
 
     private static boolean floods(final ServerLevel level, final int cx, final int cz, final int planeY)

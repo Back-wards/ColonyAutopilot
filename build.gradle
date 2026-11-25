@@ -126,7 +126,7 @@ dependencies {
         transitive = false
     }
 
-    compileOnly("curse.maven:tacz-1-21-1-1353462:8547439") {
+    compileOnly("curse.maven:timeless-and-classics-zero-1028108:9623169") {
         transitive = false
     }
 }

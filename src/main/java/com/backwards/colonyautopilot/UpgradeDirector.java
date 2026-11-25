@@ -12,22 +12,26 @@ import com.minecolonies.api.colony.requestsystem.token.IToken;
 import com.minecolonies.api.colony.workorders.WorkOrderType;
 import com.minecolonies.api.colony.workorders.IBuilderWorkOrder;
 import com.minecolonies.api.colony.workorders.IWorkOrder;
+import com.minecolonies.api.eventbus.events.colony.ColonyDeletedModEvent;
 import com.minecolonies.api.eventbus.events.colony.buildings.BuildingAddedModEvent;
 import com.minecolonies.api.eventbus.events.colony.buildings.BuildingConstructionModEvent;
 import com.minecolonies.api.items.component.ColonyId;
 import com.minecolonies.api.util.InventoryUtils;
 import com.minecolonies.api.util.ItemStackUtils;
+import com.minecolonies.api.util.WorldUtil;
 import net.minecraft.util.Tuple;
 import com.minecolonies.core.colony.buildings.AbstractBuildingGuards;
 import com.minecolonies.core.colony.buildings.AbstractBuildingStructureBuilder;
 import com.minecolonies.core.colony.buildings.workerbuildings.BuildingBarracks;
 import com.minecolonies.core.colony.buildings.workerbuildings.BuildingBuilder;
+import com.minecolonies.core.colony.buildings.workerbuildings.BuildingStable;
 import com.minecolonies.core.colony.buildings.workerbuildings.BuildingTownHall;
+import com.minecolonies.core.colony.buildings.modules.BuildingModules;
 import com.minecolonies.core.colony.buildings.modules.WorkerBuildingModule;
+import com.minecolonies.core.colony.buildings.modules.settings.StringSetting;
 import com.minecolonies.core.colony.workorders.WorkOrderBuilding;
 import com.minecolonies.core.colony.workorders.WorkOrderMiner;
 import com.minecolonies.core.util.TeleportHelper;
-import com.mojang.authlib.GameProfile;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
@@ -36,7 +40,6 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.common.util.FakePlayer;
-import net.neoforged.neoforge.common.util.FakePlayerFactory;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
@@ -89,9 +92,11 @@ public class UpgradeDirector
     private final Map<ColonyId, Map<Integer, OrderPulse>> orderPulse = new HashMap<>();
 
     private record OrderPulse(BlockPos progressPos, String stage, int available, int needed, BlockPos builderPos,
-      long since, long coreSince, long cursorSince, boolean nudged)
+      long since, long coreSince, long cursorSince, boolean nudged, long nudgedAt, BlockPos nudgedCrew, int builderTicks)
     {
     }
+
+    private static final String GROUND_AWAY = "ground not loaded";
 
     private final Map<ColonyId, Map<BlockPos, Integer>> builderJamStrikes = new HashMap<>();
 
@@ -121,8 +126,6 @@ public class UpgradeDirector
 
     private final Map<ColonyId, Set<BlockPos>> recycledUpgrades = new HashMap<>();
 
-    private final Map<ColonyId, Map<BlockPos, Long>> recycledAt = new HashMap<>();
-
     private static final long RECYCLE_HOLD_CAP_TICKS = 24000L;
 
     private final Map<ColonyId, Map<BlockPos, Long>> addedAt = new HashMap<>();
@@ -133,6 +136,7 @@ public class UpgradeDirector
     {
         IMinecoloniesAPI.getInstance().getEventBus().subscribe(BuildingConstructionModEvent.class, this::onConstructionCompleted);
         IMinecoloniesAPI.getInstance().getEventBus().subscribe(BuildingAddedModEvent.class, this::onBuildingAdded);
+        IMinecoloniesAPI.getInstance().getEventBus().subscribe(ColonyDeletedModEvent.class, this::onColonyDeleted);
         ColonyAutopilot.LOGGER.info("UpgradeDirector subscribed to MineColonies events");
     }
 
@@ -144,6 +148,12 @@ public class UpgradeDirector
         {
             ColonyGrounds.get(level).setTornDown(colony.getID(), event.getBuilding().getPosition(),
               event.getWorkOrder().getWorkOrderType() == WorkOrderType.REMOVE);
+
+            if (event.getWorkOrder().getWorkOrderType() == WorkOrderType.REPAIR
+                  && ColonyGrounds.get(level).owesRepair(colony.getID(), event.getBuilding().getPosition()))
+            {
+                queueOutfit(event.getBuilding());
+            }
 
             ColonyGrounds.get(level).settleRepair(colony.getID(), event.getBuilding().getPosition());
         }
@@ -181,11 +191,7 @@ public class UpgradeDirector
             {
                 recycled.remove(event.getBuilding().getID());
             }
-            final Map<BlockPos, Long> recycledTimes = recycledAt.get(ColonyAutopilot.colonyKey(colony));
-            if (recycledTimes != null)
-            {
-                recycledTimes.remove(event.getBuilding().getID());
-            }
+            endRecycleHold(colony, event.getBuilding().getID());
             final Map<BlockPos, Long> refused = refusedUntil.get(ColonyAutopilot.colonyKey(colony));
             if (refused != null)
             {
@@ -209,6 +215,30 @@ public class UpgradeDirector
         }
     }
 
+    private void onColonyDeleted(final ColonyDeletedModEvent event)
+    {
+        final IColony colony = event.getColony();
+        if (colony == null)
+        {
+            return;
+        }
+        pending.remove(colony);
+        final Set<ColonyId> live = new HashSet<>();
+        for (final IColony other : IColonyManager.getInstance().getAllColonies())
+        {
+            if (other != colony)
+            {
+                live.add(ColonyAutopilot.colonyKey(other));
+            }
+        }
+        pruneColonyState(live);
+    }
+
+    private void pruneColonyState(final Set<ColonyId> live)
+    {
+        ColonyAutopilot.retainColonies(live, orderPulse, recycleStrikes, buildParkedUntil, parkCount, failedClaimers, paidAtSite, builderJamStrikes, crewlessSince, heldBelowHall, unbuiltSince, pendingEvaluatedAt, gateWarned, recycledUpgrades, refusedUntil, addedAt);
+    }
+
     @SubscribeEvent
     public void onServerStarted(final ServerStartedEvent event)
     {
@@ -227,7 +257,6 @@ public class UpgradeDirector
         unbuiltSince.clear();
         gateWarned.clear();
         recycledUpgrades.clear();
-        recycledAt.clear();
         refusedUntil.clear();
         addedAt.clear();
     }
@@ -260,7 +289,7 @@ public class UpgradeDirector
             {
                 live.add(ColonyAutopilot.colonyKey(colony));
             }
-            ColonyAutopilot.retainColonies(live, orderPulse, recycleStrikes, buildParkedUntil, parkCount, failedClaimers, paidAtSite, builderJamStrikes, crewlessSince, heldBelowHall, unbuiltSince, pendingEvaluatedAt, gateWarned, recycledUpgrades, recycledAt, refusedUntil, addedAt);
+            pruneColonyState(live);
         }
         else if (!pending.isEmpty())
         {
@@ -301,6 +330,19 @@ public class UpgradeDirector
         }
     }
 
+    private static void levelOnePathForTower(final IColony colony, final IBuilding building)
+    {
+        final String path = building.getBlueprintPath();
+        if (building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutBarracksTower && building.getBuildingLevel() > 0
+              && path != null && path.endsWith("0.blueprint") && building.getTileEntity() != null)
+        {
+            final String levelOne = path.substring(0, path.length() - "0.blueprint".length()) + "1.blueprint";
+            building.setBlueprintPath(levelOne);
+            ColonyAutopilot.LOGGER.debug("[{}] the {} at {} carried MineColonies' level-0 blueprint path {} — it now names {}, the level-1 file every other building keeps",
+              colony.getName(), SiteSelector.plainName(building), building.getPosition().toShortString(), path, levelOne);
+        }
+    }
+
     private void evaluate(final IColony colony)
     {
         if (!AutopilotConfig.get(colony, AutopilotConfig.AUTO_UPGRADE_ENABLED))
@@ -322,7 +364,29 @@ public class UpgradeDirector
             recycled.removeIf(site -> colony.getServerBuildingManager().getBuilding(site) == null);
         }
 
+        final boolean buildsOn = AutopilotConfig.get(colony, AutopilotConfig.AUTO_BUILD_PLACED_HUTS);
+        final boolean upgradesOn = AutopilotConfig.get(colony, AutopilotConfig.AUTO_UPGRADE_BUILDINGS);
+
+        final ColonyGrounds grounds = ColonyGrounds.get(level);
+        final Map<Long, Long> recycledSites = grounds.recycledAt(colony.getID());
+
         List<WorkOrderBuilding> openOrders = colony.getWorkManager().getWorkOrdersOfType(WorkOrderBuilding.class);
+        if (!recycledSites.isEmpty())
+        {
+
+            for (final long site : List.copyOf(recycledSites.keySet()))
+            {
+                if (colony.getServerBuildingManager().getBuilding(BlockPos.of(site)) == null)
+                {
+                    grounds.removeRecycledAt(colony.getID(), BlockPos.of(site));
+                }
+            }
+
+            for (final WorkOrderBuilding order : openOrders)
+            {
+                grounds.removeRecycledAt(colony.getID(), order.getLocation());
+            }
+        }
 
         final List<IBuilding> staffedHuts = new ArrayList<>();
         final List<IBuilding> crewlessHuts = new ArrayList<>();
@@ -330,6 +394,7 @@ public class UpgradeDirector
         final List<IBuilding> candidates = new ArrayList<>();
         for (final IBuilding building : colony.getServerBuildingManager().getBuildings().values())
         {
+            levelOnePathForTower(colony, building);
             if (building instanceof BuildingBuilder)
             {
                 if (!building.getAllAssignedCitizen().isEmpty())
@@ -343,9 +408,11 @@ public class UpgradeDirector
                 }
             }
 
-            else if (building.getBuildingLevel() > 0 && building.getAllAssignedCitizen().isEmpty()
-                       && building.getModule(WorkerBuildingModule.class) != null
-                       && !(building instanceof AbstractBuildingGuards))
+            else if (building.getBuildingLevel() > 0
+                       && (building instanceof BuildingStable
+                             ? building.getModule(BuildingModules.STABLEMASTER_WORK).getAssignedCitizen().isEmpty()
+                             : building.getAllAssignedCitizen().isEmpty() && building.getModule(WorkerBuildingModule.class) != null
+                                 && !(building instanceof AbstractBuildingGuards)))
             {
                 crewlessHuts.add(building);
             }
@@ -354,11 +421,13 @@ public class UpgradeDirector
                 townHallLevel = building.getBuildingLevel();
             }
             if (building.getBuildingLevel() < building.getMaxBuildingLevel()
+                  && ((building.getBuildingLevel() == 0 ? buildsOn : upgradesOn) || recycledSites.containsKey(building.getID().asLong()))
 
                   && !tornDown(building)
 
-                  && !(AutopilotConfig.live(colony, AutopilotConfig.NO_GRAVES)
-                        && building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutGraveyard))
+                  && (recycledSites.containsKey(building.getID().asLong())
+                        || !(AutopilotConfig.live(colony, AutopilotConfig.NO_GRAVES)
+                              && building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutGraveyard)))
             {
                 candidates.add(building);
             }
@@ -377,7 +446,7 @@ public class UpgradeDirector
         final int townHall = townHallLevel;
         final Integer wantedUniversity = researchWants.get(ModBlocks.blockHutUniversity);
 
-        if (AutopilotConfig.get(colony, AutopilotConfig.INSTANT_UNIVERSITY))
+        if (upgradesOn && AutopilotConfig.get(colony, AutopilotConfig.INSTANT_UNIVERSITY))
         {
 
             if (wantedUniversity != null)
@@ -387,7 +456,7 @@ public class UpgradeDirector
 
                     if (building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutUniversity
                           && building.getBuildingLevel() < Math.min(wantedUniversity, building.getMaxBuildingLevel())
-                          && instantOpen(colony, building, wantedUniversity, townHall))
+                          && instantOpen(colony, building, wantedUniversity, townHall, openOrders))
                     {
                         return;
                     }
@@ -400,14 +469,15 @@ public class UpgradeDirector
                 IBuilding bestHome = null;
                 for (final IBuilding home : colony.getServerBuildingManager().getBuildings().values())
                 {
+
                     if (home.getBuildingType().getBuildingBlock() == ModBlocks.blockHutHome
-                          && home.getBuildingLevel() > 0
+                          && home.getBuildingLevel() > 0 && !tornDown(home) && !removalOrdered(home, openOrders)
                           && (bestHome == null || home.getBuildingLevel() > bestHome.getBuildingLevel()))
                     {
                         bestHome = home;
                     }
                 }
-                if (bestHome != null && instantOpen(colony, bestHome, wantedHome, townHall))
+                if (bestHome != null && instantOpen(colony, bestHome, wantedHome, townHall, openOrders))
                 {
                     return;
                 }
@@ -428,7 +498,7 @@ public class UpgradeDirector
         for (final Iterator<IBuilding> overCap = candidates.iterator(); overCap.hasNext(); )
         {
             final IBuilding building = overCap.next();
-            if (building instanceof BuildingTownHall || building.getBuildingLevel() <= townHall)
+            if (building instanceof BuildingTownHall || building.getBuildingLevel() <= townHall || recycledSites.containsKey(building.getID().asLong()))
             {
                 continue;
             }
@@ -438,14 +508,13 @@ public class UpgradeDirector
             if (lastHeldAt == null || lastHeldAt != building.getBuildingLevel())
             {
                 ColonyAutopilot.LOGGER.info("[{}] {} holds at level {} until the Town Hall (level {}) catches up",
-                  colony.getName(), building.getBuildingDisplayName(), building.getBuildingLevel(), townHall);
+                  colony.getName(), SiteSelector.plainName(building), building.getBuildingLevel(), townHall);
             }
         }
 
-        final Map<BlockPos, Long> recycledSites = recycledAt.getOrDefault(key, Map.of());
         for (final IBuilding building : candidates)
         {
-            if (recycledSites.containsKey(building.getID()) && (staffedHuts.isEmpty() || servableBy(freeHuts, building))
+            if (recycledSites.containsKey(building.getID().asLong()) && (staffedHuts.isEmpty() || servableBy(freeHuts, building))
                   && readyForOrder(colony, building, openOrders) && request(colony, level, building))
             {
                 return;
@@ -535,17 +604,38 @@ public class UpgradeDirector
             }
         }
 
+        for (final IBuilding researchHut : candidates)
+        {
+            final Block researchBlock = researchHut.getBuildingType().getBuildingBlock();
+            if ((researchBlock == ModBlocks.blockHutHospital || researchBlock == ModBlocks.blockHutBlacksmith)
+                  && researchHut.getBuildingLevel() > 0
+                  && researchHut.getBuildingLevel() < Math.min(researchWants.getOrDefault(researchBlock, 0), townHall)
+                  && (staffedHuts.isEmpty() || servableBy(freeHuts, researchHut))
+                  && readyForOrder(colony, researchHut, openOrders))
+            {
+                if (request(colony, level, researchHut))
+                {
+                    return;
+                }
+            }
+        }
+
         final List<IBuilding> laggingTowers = new ArrayList<>();
+        final List<IBuilding> laggingBarracks = new ArrayList<>();
         for (final IBuilding building : candidates)
         {
             final Block towerBlock = building.getBuildingType().getBuildingBlock();
-            if ((towerBlock == ModBlocks.blockHutGuardTower || towerBlock == ModBlocks.blockHutBarracksTower)
+            if ((towerBlock == ModBlocks.blockHutGuardTower || towerBlock == ModBlocks.blockHutBarracksTower
+                   || towerBlock == ModBlocks.blockHutStable || towerBlock == ModBlocks.blockHutBarracks)
                   && building.getBuildingLevel() > 0 && building.getBuildingLevel() < townHall)
             {
-                laggingTowers.add(building);
+                (towerBlock == ModBlocks.blockHutBarracks ? laggingBarracks : laggingTowers).add(building);
             }
         }
         laggingTowers.sort(Comparator.comparingInt(IBuilding::getBuildingLevel).thenComparing(IBuilding::getID));
+
+        laggingTowers.addAll(0, laggingBarracks);
+        laggingTowers.sort(Comparator.comparingInt(IBuilding::getBuildingLevel));
         for (final IBuilding tower : laggingTowers)
         {
             if (!staffedHuts.isEmpty() && !servableBy(freeHuts, tower))
@@ -679,7 +769,9 @@ public class UpgradeDirector
         }
         for (final IBuilding building : colony.getServerBuildingManager().getBuildings().values())
         {
-            if (!(building instanceof BuildingTownHall) || building.getBuildingLevel() >= building.getMaxBuildingLevel())
+            if (!(building instanceof BuildingTownHall) || building.getBuildingLevel() >= building.getMaxBuildingLevel()
+
+                  || !AutopilotConfig.get(colony, building.getBuildingLevel() == 0 ? AutopilotConfig.AUTO_BUILD_PLACED_HUTS : AutopilotConfig.AUTO_UPGRADE_BUILDINGS))
             {
                 continue;
             }
@@ -689,7 +781,8 @@ public class UpgradeDirector
                 return true;
             }
 
-            return readyForOrder(colony, building, openOrders) && request(colony, level, building);
+            return resolvableByBuilder(colony, building.getBuildingLevel() + 1)
+                     && readyForOrder(colony, building, openOrders) && request(colony, level, building);
         }
         return false;
     }
@@ -697,7 +790,7 @@ public class UpgradeDirector
     boolean upgradeDue(final IColony colony)
     {
 
-        if (!AutopilotConfig.live(colony, AutopilotConfig.AUTO_UPGRADE_ENABLED))
+        if (!AutopilotConfig.upgradesBuildings(colony))
         {
             return false;
         }
@@ -744,12 +837,11 @@ public class UpgradeDirector
         {
             return false;
         }
-        final FakePlayer owner = FakePlayerFactory.get(level,
-          new GameProfile(colony.getPermissions().getOwner(), colony.getPermissions().getOwnerName()));
+        final FakePlayer owner = ColonyAutopilot.fakeOwner(level, colony);
         ColonyAutopilot.LOGGER.info("[{}] requesting {} {} (level {} -> {})",
           colony.getName(),
           upgrade ? "upgrade of" : "construction of",
-          building.getBuildingDisplayName(),
+          SiteSelector.plainName(building),
           building.getBuildingLevel(),
           building.getBuildingLevel() + 1);
         building.requestUpgrade(owner, BlockPos.ZERO);
@@ -771,7 +863,7 @@ public class UpgradeDirector
         if (!filed)
         {
             ColonyAutopilot.LOGGER.debug("[{}] MineColonies refused the order for {} at {} — the cap records nothing",
-              colony.getName(), building.getBuildingDisplayName(), building.getID().toShortString());
+              colony.getName(), SiteSelector.plainName(building), building.getID().toShortString());
             return false;
         }
         if (refile)
@@ -818,16 +910,18 @@ public class UpgradeDirector
         return false;
     }
 
-    private boolean instantOpen(final IColony colony, final IBuilding building, final int wantedLevel, final int townHall)
+    private boolean instantOpen(final IColony colony, final IBuilding building, final int wantedLevel, final int townHall,
+      final List<WorkOrderBuilding> openOrders)
     {
-        if (tornDown(building))
+
+        if (tornDown(building) || removalOrdered(building, openOrders) || !siteLoaded(colony, building))
         {
             return false;
         }
 
         int target = Math.min(Math.min(wantedLevel, building.getMaxBuildingLevel()), townHall + 1);
         while (target > building.getBuildingLevel()
-                 && !building.canBeBuiltByBuilder(target) && !resolvableByBuilder(colony, target, building.getPosition()))
+                 && !building.canBeBuiltByBuilder(target) && !resolvableByBuilder(colony, target))
         {
             target--;
         }
@@ -846,10 +940,24 @@ public class UpgradeDirector
                 colony.getWorkManager().removeWorkOrder(order.getID());
             }
         }
+
+        endRecycleHold(colony, building.getID());
         scheduleRepair(colony, building.getID());
         ColonyAutopilot.LOGGER.info("[{}] {} opened early to level {} — the research it gates unlocks now, and the builders raise its structure to match",
-          colony.getName(), building.getBuildingDisplayName(), target);
+          colony.getName(), SiteSelector.plainName(building), target);
         return true;
+    }
+
+    private static boolean removalOrdered(final IBuilding building, final List<WorkOrderBuilding> openOrders)
+    {
+        for (final WorkOrderBuilding order : openOrders)
+        {
+            if (order.getWorkOrderType() == WorkOrderType.REMOVE && order.getLocation().equals(building.getID()))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private IBuilding hallRuleSite(final IColony colony, final List<IBuilding> candidates, final List<IBuilding> freeHuts,
@@ -860,15 +968,14 @@ public class UpgradeDirector
         {
             return null;
         }
-        if (resolvableByBuilder(colony, townHall + 1, hall.getPosition()))
+        if (resolvableByBuilder(colony, townHall + 1))
         {
             return hall;
         }
         IBuilding climber = null;
         for (final IBuilding hut : candidates)
         {
-            if (!(hut instanceof BuildingBuilder) || hut.getAllAssignedCitizen().isEmpty()
-                  || hut.getPosition().distSqr(hall.getPosition()) > SiteSelector.BUILDER_RANGE_SQ)
+            if (!(hut instanceof BuildingBuilder) || hut.getAllAssignedCitizen().isEmpty())
             {
                 continue;
             }
@@ -885,12 +992,11 @@ public class UpgradeDirector
         return climber;
     }
 
-    private static boolean resolvableByBuilder(final IColony colony, final int level, final BlockPos site)
+    private static boolean resolvableByBuilder(final IColony colony, final int level)
     {
         for (final IBuilding hut : colony.getServerBuildingManager().getBuildings().values())
         {
-            if (hut instanceof BuildingBuilder && !hut.getAllAssignedCitizen().isEmpty() && hut.getBuildingLevel() >= level
-                  && hut.getPosition().distSqr(site) <= SiteSelector.BUILDER_RANGE_SQ)
+            if (hut instanceof BuildingBuilder && !hut.getAllAssignedCitizen().isEmpty() && hut.getBuildingLevel() >= level)
             {
                 return true;
             }
@@ -905,9 +1011,12 @@ public class UpgradeDirector
         final long now = level.getGameTime();
         for (final IBuilding hut : crewlessHuts)
         {
-            final WorkerBuildingModule crew = hut.getModule(WorkerBuildingModule.class);
 
-            if (crew != null && !com.minecolonies.core.util.BuildingUtils.canAutoHire(hut, crew.getHiringMode(), crew.getJobEntry()))
+            final WorkerBuildingModule crew = hut instanceof BuildingStable ? hut.getModule(BuildingModules.STABLEMASTER_WORK)
+                                                : hut.getModule(WorkerBuildingModule.class);
+
+            final boolean groundLoaded = WorldUtil.isChunkLoaded(level, hut.getPosition().getX() >> 4, hut.getPosition().getZ() >> 4);
+            if (crew != null && !com.minecolonies.core.util.BuildingUtils.canAutoHire(hut, crew.getHiringMode(), groundLoaded ? crew.getJobEntry() : null))
             {
                 since.remove(hut.getID());
                 continue;
@@ -915,16 +1024,18 @@ public class UpgradeDirector
             final long first = since.computeIfAbsent(hut.getID(), k -> now);
 
             final boolean warned = first < 0;
-            if (!warned && now - first < CREWLESS_GRACE_TICKS)
+            if (!groundLoaded || (!warned && now - first < CREWLESS_GRACE_TICKS))
             {
                 continue;
             }
             final ICitizenData jobless = colony.getCitizenManager().getJoblessCitizen();
+
+            final String post = hut instanceof BuildingStable ? "the Stablemaster's post" : "the crew";
             if (crew != null && jobless != null && crew.assignCitizen(jobless))
             {
                 since.remove(hut.getID());
-                ColonyAutopilot.LOGGER.info("[{}] the crew at {} stood empty — {} hired on the spot",
-                  colony.getName(), hut.getID().toShortString(), jobless.getName());
+                ColonyAutopilot.LOGGER.info("[{}] {} at {} stood empty — {} hired on the spot",
+                  colony.getName(), post, hut.getID().toShortString(), jobless.getName());
             }
             else if (!warned && now - first >= CREWLESS_WARN_TICKS)
             {
@@ -937,8 +1048,8 @@ public class UpgradeDirector
                 }
                 else
                 {
-                    ColonyAutopilot.LOGGER.info("[{}] the crew at {} stands empty and no jobless citizen can fill it",
-                      colony.getName(), hut.getID().toShortString());
+                    ColonyAutopilot.LOGGER.info("[{}] {} at {} stands empty and no jobless citizen can fill it",
+                      colony.getName(), post, hut.getID().toShortString());
                 }
             }
         }
@@ -964,13 +1075,22 @@ public class UpgradeDirector
             {
                 continue;
             }
-            for (final IBuilding hut : staffedHuts)
+            IBuilding taker = nearestCrew(order, staffedHuts, busy);
+
+            if (taker == null)
             {
-                if (!busy.contains(hut.getID()) && order.canBuild(hut))
+                for (final IBuilding hut : staffedHuts)
                 {
-                    busy.add(hut.getID());
-                    break;
+                    if (!busy.contains(hut.getID()) && order.canBuildIgnoringDistance(hut, hut.getPosition(), hut.getBuildingLevel()))
+                    {
+                        taker = hut;
+                        break;
+                    }
                 }
+            }
+            if (taker != null)
+            {
+                busy.add(taker.getID());
             }
         }
         final List<IBuilding> free = new ArrayList<>();
@@ -984,16 +1104,39 @@ public class UpgradeDirector
         return free;
     }
 
+    public static IBuilding nearestCrew(final WorkOrderBuilding order, final Iterable<IBuilding> huts, final Set<BlockPos> claimed)
+    {
+        IBuilding nearest = null;
+        double nearestDistance = Double.MAX_VALUE;
+        for (final IBuilding hut : huts)
+        {
+            if (!(hut instanceof BuildingBuilder crew) || crew.getModule(WorkerBuildingModule.class).getFirstCitizen() == null
+                  || crew.hasWorkOrder() || claimed.contains(hut.getID()))
+            {
+                continue;
+            }
+
+            final StringSetting mode = crew.getSetting(BuildingBuilder.MODE);
+            final double distance = hut.getPosition().distSqr(order.getLocation());
+            if ((mode == null || !mode.getValue().equals(BuildingBuilder.MANUAL_SETTING))
+                  && order.canBuildIgnoringDistance(hut, hut.getPosition(), hut.getBuildingLevel())
+                  && distance < nearestDistance)
+            {
+                nearest = hut;
+                nearestDistance = distance;
+            }
+        }
+        return nearest;
+    }
+
     private static boolean servableBy(final List<IBuilding> freeHuts, final IBuilding building)
     {
         final int target = building.getBuildingLevel() + 1;
         for (final IBuilding hut : freeHuts)
         {
-            if ((hut.getBuildingLevel() >= target
-                   || hut.getBuildingLevel() == BuildingBuilder.MAX_BUILDING_LEVEL
-                   || hut.getID().equals(building.getID()))
-
-                  && hut.getPosition().distSqr(building.getPosition()) <= SiteSelector.BUILDER_RANGE_SQ)
+            if (hut.getBuildingLevel() >= target
+                  || hut.getBuildingLevel() == BuildingBuilder.MAX_BUILDING_LEVEL
+                  || hut.getID().equals(building.getID()))
             {
                 return true;
             }
@@ -1071,33 +1214,42 @@ public class UpgradeDirector
             for (final IWorkOrder order : colony.getWorkManager().getWorkOrders().values())
             {
                 final BlockPos failed = avoid.get(order.getLocation());
-                if (failed == null || !(order instanceof WorkOrderBuilding)
-                      || (order.isClaimed() && !failed.equals(order.getClaimedBy())))
+                if (failed == null || !(order instanceof WorkOrderBuilding))
+                {
+                    continue;
+                }
+
+                avoid.remove(order.getLocation());
+                if (order.isClaimed() && !failed.equals(order.getClaimedBy()))
                 {
                     continue;
                 }
 
                 final List<ItemStack> paid = paidAtSite.getOrDefault(key, Map.of()).get(order.getLocation());
-                BuildingBuilder receiver = null;
-                for (final IBuilding hut : colony.getServerBuildingManager().getBuildings().values())
+                BuildingBuilder receiver = (BuildingBuilder) nearestCrew((WorkOrderBuilding) order,
+                  colony.getServerBuildingManager().getBuildings().values(), Set.of(failed));
+                if (receiver == null)
                 {
-
-                    if (hut instanceof BuildingBuilder capable && hut.getBuildingLevel() > 0
-                          && hut.getBuildingLevel() >= ((WorkOrderBuilding) order).getTargetLevel()
-                          && !hut.getID().equals(failed) && !hut.getAllAssignedCitizen().isEmpty())
+                    for (final IBuilding hut : colony.getServerBuildingManager().getBuildings().values())
                     {
-                        if (receiver == null)
+
+                        if (hut instanceof BuildingBuilder capable && hut.getBuildingLevel() > 0
+                              && hut.getBuildingLevel() >= ((WorkOrderBuilding) order).getTargetLevel()
+                              && !hut.getID().equals(failed) && !hut.getAllAssignedCitizen().isEmpty())
                         {
-                            receiver = capable;
-                        }
-                        if (paid == null)
-                        {
-                            break;
-                        }
-                        if (capable.getWorkOrder() == null)
-                        {
-                            receiver = capable;
-                            break;
+                            if (receiver == null)
+                            {
+                                receiver = capable;
+                            }
+                            if (paid == null)
+                            {
+                                break;
+                            }
+                            if (capable.getWorkOrder() == null)
+                            {
+                                receiver = capable;
+                                break;
+                            }
                         }
                     }
                 }
@@ -1112,7 +1264,6 @@ public class UpgradeDirector
 
                     order.setClaimedBy(null);
                     order.setClaimedBy(receiver.getID());
-                    avoid.remove(order.getLocation());
                     ColonyAutopilot.LOGGER.info("[{}] '{}' at {} goes to the crew at {} — the last builder never reached it",
                       colony.getName(), order.getDisplayName().getString(), order.getLocation().toShortString(), receiver.getID().toShortString());
                     if (paid != null)
@@ -1143,12 +1294,19 @@ public class UpgradeDirector
                     continue;
                 }
                 final OrderPulse waiting = pulses.get(order.getID());
-                if (waiting == null)
+
+                if (waiting == null || GROUND_AWAY.equals(waiting.stage()))
                 {
-                    pulses.put(order.getID(), new OrderPulse(null, "", 0, 0, null, now, now, now, false));
+                    pulses.put(order.getID(), new OrderPulse(null, "", 0, 0, null, now, now, now, false, 0L, null, -1));
                     continue;
                 }
                 if (now - waiting.since() < staleTicks)
+                {
+                    continue;
+                }
+
+                final IBuilding site = colony.getServerBuildingManager().getBuilding(order.getLocation());
+                if (site != null && !siteLoaded(colony, site))
                 {
                     continue;
                 }
@@ -1173,16 +1331,51 @@ public class UpgradeDirector
                 continue;
             }
 
+            final boolean hutLoaded = level.isLoaded(builder.getPosition());
+            if (!hutLoaded || !level.isLoaded(order.getLocation()))
+            {
+                final OrderPulse had = pulses.get(order.getID());
+                final boolean waiting = had != null && GROUND_AWAY.equals(had.stage());
+                final long since = waiting ? had.since() : now;
+                final boolean said = waiting && had.nudged();
+                if (!said && now - since >= staleTicks)
+                {
+                    ColonyAutopilot.LOGGER.info("[{}] '{}' at {} has waited {} game-minutes for {} to be loaded (tweaks.keepVillageLoaded is off for the colony, or the village spans more chunks than are kept loaded) — MineColonies' builder works no order there and the watchdog judges none, so the crew at {} builds nothing else until that ground is loaded again",
+                      colony.getName(), order.getDisplayName().getString(), order.getLocation().toShortString(), staleMinutes,
+                      hutLoaded ? "its site" : "its crew's hut", builder.getID().toShortString());
+                }
+                pulses.put(order.getID(), new OrderPulse(null, GROUND_AWAY, 0, 0, null, since, since, since, said || now - since >= staleTicks, 0L, null, -1));
+                continue;
+            }
+
             int available = 0;
             int needed = 0;
-            final var ledger = builder.getNeededResources().values();
+
+            int neededNow = 0;
+            int shortNow = 0;
+            final var ledger = builder.getNeededResources();
             if (!ledger.isEmpty())
             {
                 final Map<Item, List<ItemStack>> onHand = MaterialTrickle.onHand(builder);
-                for (final var resource : ledger)
+                for (final var resource : ledger.values())
                 {
                     available += Math.min(MaterialTrickle.held(onHand, resource.getItemStack()), resource.getAmount());
                     needed += resource.getAmount();
+                }
+                final var bucket = builder.getRequiredResources();
+                if (bucket != null)
+                {
+                    for (final var line : bucket.getResourceMap().entrySet())
+                    {
+                        final var resource = ledger.get(line.getKey());
+                        if (resource != null)
+                        {
+
+                            final int wanted = Math.min(line.getValue(), resource.getAmount());
+                            neededNow += wanted;
+                            shortNow += Math.max(0, wanted - MaterialTrickle.held(onHand, resource.getItemStack()));
+                        }
+                    }
                 }
             }
             final var progress = builder.getProgress();
@@ -1191,18 +1384,27 @@ public class UpgradeDirector
 
             BlockPos builderPos = null;
             boolean asleep = false;
+            int builderTicks = -1;
             for (final var citizenData : builder.getAllAssignedCitizen())
             {
                 builderPos = citizenData.getEntity()
                                .map(e -> new BlockPos(e.getBlockX() >> 2, e.getBlockY() >> 2, e.getBlockZ() >> 2))
                                .orElse(null);
                 asleep = citizenData.getEntity().map(e -> e.isSleeping()).orElse(false);
+
+                builderTicks = ticksLived(level, citizenData);
                 break;
             }
             final OrderPulse last = pulses.get(order.getID());
             if (last == null)
             {
-                pulses.put(order.getID(), new OrderPulse(progressPos, stage, available, needed, builderPos, now, now, now, false));
+                pulses.put(order.getID(), new OrderPulse(progressPos, stage, available, needed, builderPos, now, now, now, false, 0L, null, builderTicks));
+                continue;
+            }
+
+            if (builderTicks >= 0 && builderTicks == last.builderTicks())
+            {
+                pulses.put(order.getID(), new OrderPulse(progressPos, stage, available, needed, builderPos, now, now, now, last.nudged(), now, last.nudgedCrew(), builderTicks));
                 continue;
             }
 
@@ -1215,17 +1417,18 @@ public class UpgradeDirector
             final long sinceCore = (cursorMoved || suppliesMoved) ? now : last.coreSince();
             final long sinceCursor = cursorMoved ? now : last.cursorSince();
 
-            final boolean nudged = last.nudged() && !cursorMoved;
-            if (cursorMoved || suppliesMoved || builderMoved)
-            {
-                pulses.put(order.getID(), new OrderPulse(progressPos, stage, available, needed, builderPos, sinceAny, sinceCore, sinceCursor, nudged));
-            }
+            final boolean nudged = last.nudged() && builder.getID().equals(last.nudgedCrew()) && last.stage().equals(stage)
+                                     && (!cursorMoved || now - last.nudgedAt() < staleTicks);
+
+            final boolean moved = cursorMoved || suppliesMoved || builderMoved;
+            pulses.put(order.getID(), new OrderPulse(progressPos, stage, moved ? available : last.available(), moved ? needed : last.needed(),
+              builderPos, sinceAny, sinceCore, sinceCursor, nudged, last.nudgedAt(), last.nudgedCrew(), builderTicks));
 
             if (asleep || (now - sinceAny < staleTicks && now - sinceCore < 3L * staleTicks && now - sinceCursor < 6L * staleTicks))
             {
                 continue;
             }
-            final boolean materialShort = needed > available;
+            final boolean materialShort = shortNow > 0;
 
             int ownWaiting = 0;
             if (!builder.getAllAssignedCitizen().isEmpty() && AutopilotConfig.progressionMode(colony))
@@ -1239,16 +1442,18 @@ public class UpgradeDirector
             }
             if (ownWaiting > 0)
             {
-                pulses.put(order.getID(), new OrderPulse(progressPos, stage, available, needed, builderPos, now, now, now, nudged));
+                pulses.put(order.getID(), new OrderPulse(progressPos, stage, available, needed, builderPos, now, now, now, nudged, last.nudgedAt(), last.nudgedCrew(), builderTicks));
                 ColonyAutopilot.LOGGER.debug("[{}] the watchdog holds off at {}: {} of its requests (or their crafting children) wait for funds",
                   colony.getName(), order.getLocation().toShortString(), ownWaiting);
                 continue;
             }
+
             final String why = materialShort
-                                 ? "short " + (needed - available) + " of " + needed + " materials"
-                                 : progressPos == null
-                                     ? "materials in hand but no block ever placed"
-                                     : "materials in hand, blueprint cursor frozen at " + progressPos.toShortString();
+                                 ? "short " + shortNow + " of the " + neededNow + " materials its work in hand needs"
+                                 : (needed > available
+                                      ? "the work in hand lacks no materials (" + (needed - available) + " of " + needed + " still to come for later)"
+                                      : "materials in hand")
+                                     + (progressPos == null ? " but no block ever placed" : ", blueprint cursor frozen at " + progressPos.toShortString());
 
             boolean sentHome = false;
             if (!materialShort && !nudged)
@@ -1258,7 +1463,9 @@ public class UpgradeDirector
                     if (citizen.getEntity().isPresent() && TeleportHelper.teleportCitizen(citizen.getEntity().get(), level, builder.getPosition()))
                     {
                         sentHome = true;
-                        ColonyAutopilot.LOGGER.info("[{}] '{}' at {} has made no construction progress for at least {} game-minutes — nudged {} home to re-path; the order stands, and a second stall recycles it ({})",
+                        ColonyAutopilot.LOGGER.info(order instanceof WorkOrderBuilding
+                                                      ? "[{}] '{}' at {} has made no construction progress for at least {} game-minutes — nudged {} home to re-path; the order stands, and a second stall recycles it ({})"
+                                                      : "[{}] '{}' at {} has made no construction progress for at least {} game-minutes — nudged {} home to re-path; the order stands, and a second stall cancels it ({})",
                           colony.getName(), order.getDisplayName().getString(), order.getLocation().toShortString(), staleMinutes,
                           citizen.getName(), why);
                         break;
@@ -1267,7 +1474,7 @@ public class UpgradeDirector
             }
             if (sentHome)
             {
-                pulses.put(order.getID(), new OrderPulse(progressPos, stage, available, needed, builderPos, now, now, now, true));
+                pulses.put(order.getID(), new OrderPulse(progressPos, stage, available, needed, builderPos, now, now, now, true, now, builder.getID(), builderTicks));
                 continue;
             }
             pulses.remove(order.getID());
@@ -1277,7 +1484,10 @@ public class UpgradeDirector
                 crewName = citizenData.getName();
                 break;
             }
-            ColonyAutopilot.LOGGER.info("[{}] '{}' at {} has made no construction progress for at least {} game-minutes — recycling the jammed order (claimed by {} at {}; {})",
+
+            ColonyAutopilot.LOGGER.info(order instanceof WorkOrderBuilding
+                                          ? "[{}] '{}' at {} has made no construction progress for at least {} game-minutes — recycling the jammed order (claimed by {} at {}; {})"
+                                          : "[{}] '{}' at {} has made no construction progress for at least {} game-minutes — cancelling the jammed order (claimed by {} at {}; {}); nothing here files it again: the village orders its own ornament or field afresh only where the builder had not yet set it up (an ornament's controller or first block over the ground, a field's field block), one he had is left as it stands and counts as built, and a player's own must be placed again",
               colony.getName(), order.getDisplayName().getString(), order.getLocation().toShortString(), staleMinutes,
               crewName, builder.getID().toShortString(), why);
 
@@ -1297,7 +1507,7 @@ public class UpgradeDirector
 
             if (order instanceof WorkOrderBuilding && order.getWorkOrderType() != WorkOrderType.REPAIR)
             {
-                recycledAt.computeIfAbsent(key, k -> new HashMap<>()).put(order.getLocation(), now);
+                ColonyGrounds.get(level).setRecycledAt(colony.getID(), order.getLocation(), now);
             }
 
             builder.resetNeededResources();
@@ -1342,17 +1552,50 @@ public class UpgradeDirector
                     final WorkerBuildingModule crew = builder.getModule(WorkerBuildingModule.class);
                     if (crew != null)
                     {
-                        for (final var citizenData : List.copyOf(builder.getAllAssignedCitizen()))
+                        final List<ICitizenData> dismissed = List.copyOf(builder.getAllAssignedCitizen());
+                        for (final var citizenData : dismissed)
                         {
                             crew.removeCitizen(citizenData);
                         }
-                        ColonyAutopilot.LOGGER.warn("[{}] the crew at {} ({}) jammed {} orders across the colony — the builder was dismissed for a fresh hire",
-                          colony.getName(), builder.getID().toShortString(), crewName, crewStrikes);
-                        final ICitizenData jobless = colony.getCitizenManager().getJoblessCitizen();
-                        if (jobless != null && crew.assignCitizen(jobless))
+
+                        final boolean playersHut = !com.minecolonies.core.util.BuildingUtils.canAutoHire(builder, crew.getHiringMode(), crew.getJobEntry());
+                        ICitizenData other = null;
+                        if (!playersHut)
+                        {
+                            for (final ICitizenData citizen : colony.getCitizenManager().getCitizens())
+                            {
+                                if (citizen.getWorkBuilding() == null && !citizen.isChild() && !dismissed.contains(citizen))
+                                {
+                                    other = citizen;
+                                    break;
+                                }
+                            }
+                        }
+                        final boolean freshHire = other != null && crew.assignCitizen(other);
+
+                        ICitizenData rehired = null;
+                        for (final ICitizenData man : dismissed)
+                        {
+                            if (!freshHire && rehired == null && crew.assignCitizen(man))
+                            {
+                                rehired = man;
+                            }
+                        }
+                        if (rehired != null)
+                        {
+                            ColonyAutopilot.LOGGER.warn("[{}] the crew at {} ({}) jammed {} orders across the colony — {}, so the builder was re-hired with a fresh start",
+                              colony.getName(), builder.getID().toShortString(), crewName, crewStrikes,
+                              playersHut ? "hiring here is the player's" : other == null ? "nobody else is jobless" : "nobody else could be hired");
+                        }
+                        else
+                        {
+                            ColonyAutopilot.LOGGER.warn("[{}] the crew at {} ({}) jammed {} orders across the colony — the builder was dismissed for a fresh hire",
+                              colony.getName(), builder.getID().toShortString(), crewName, crewStrikes);
+                        }
+                        if (freshHire)
                         {
                             ColonyAutopilot.LOGGER.info("[{}] {} takes over the crew at {} — hired on the spot",
-                              colony.getName(), jobless.getName(), builder.getID().toShortString());
+                              colony.getName(), other.getName(), builder.getID().toShortString());
                         }
                     }
                 }
@@ -1397,14 +1640,13 @@ public class UpgradeDirector
         boolean hallWaits = parkedHut instanceof BuildingBuilder && hall != null
                               && hall.getBuildingLevel() < hall.getMaxBuildingLevel()
                               && parkedHut.getBuildingLevel() >= hall.getBuildingLevel()
-                              && !resolvableByBuilder(colony, hall.getBuildingLevel() + 1, hall.getPosition());
+                              && !resolvableByBuilder(colony, hall.getBuildingLevel() + 1);
 
         for (final IBuilding other : colony.getServerBuildingManager().getBuildings().values())
         {
             if (hallWaits && other != parkedHut && other instanceof BuildingBuilder && other.getBuildingLevel() >= hall.getBuildingLevel()
                   && !other.getAllAssignedCitizen().isEmpty() && !tornDown(other) && !parked(colony, other.getID())
-                  && !stillRefused(colony, other.getID())
-                  && other.getPosition().distSqr(hall.getPosition()) <= SiteSelector.BUILDER_RANGE_SQ)
+                  && !stillRefused(colony, other.getID()))
             {
                 hallWaits = false;
             }
@@ -1477,7 +1719,7 @@ public class UpgradeDirector
     {
         for (final IBuilding hut : colony.getServerBuildingManager().getBuildings().values())
         {
-            if (!(hut instanceof BuildingBuilder) || !order.canBuild(hut))
+            if (!(hut instanceof BuildingBuilder) || !order.canBuildIgnoringDistance(hut, hut.getPosition(), hut.getBuildingLevel()))
             {
                 continue;
             }
@@ -1486,8 +1728,9 @@ public class UpgradeDirector
                 return true;
             }
             final WorkerBuildingModule crew = hut.getModule(WorkerBuildingModule.class);
-            if (!tornDown(hut) && crew != null
-                  && com.minecolonies.core.util.BuildingUtils.canAutoHire(hut, crew.getHiringMode(), crew.getJobEntry()))
+
+            if (!tornDown(hut) && crew != null && com.minecolonies.core.util.BuildingUtils.canAutoHire(hut, crew.getHiringMode(),
+                  WorldUtil.isChunkLoaded(colony.getWorld(), hut.getPosition().getX() >> 4, hut.getPosition().getZ() >> 4) ? crew.getJobEntry() : null))
             {
                 return true;
             }
@@ -1526,7 +1769,7 @@ public class UpgradeDirector
 
     long recycleGraceUntil(final IColony colony, final BlockPos buildingId)
     {
-        final Long at = recycledAt.getOrDefault(ColonyAutopilot.colonyKey(colony), Map.of()).get(buildingId);
+        final Long at = colony.getWorld() instanceof ServerLevel level ? ColonyGrounds.get(level).recycledAt(colony.getID()).get(buildingId.asLong()) : null;
         return at == null ? 0L : at + RECYCLE_HOLD_CAP_TICKS;
     }
 
@@ -1548,10 +1791,9 @@ public class UpgradeDirector
 
     private void endRecycleHold(final IColony colony, final BlockPos buildingId)
     {
-        final Map<BlockPos, Long> held = recycledAt.get(ColonyAutopilot.colonyKey(colony));
-        if (held != null)
+        if (colony.getWorld() instanceof ServerLevel level)
         {
-            held.remove(buildingId);
+            ColonyGrounds.get(level).removeRecycledAt(colony.getID(), buildingId);
         }
     }
 
@@ -1579,7 +1821,8 @@ public class UpgradeDirector
 
             final IBuilding owedBuilding = colony.getServerBuildingManager().getBuilding(site);
             if (!parked(colony, site) && !stillRefused(colony, site)
-                  && (owedBuilding == null || resolvableByBuilder(colony, owedBuilding.getBuildingLevel(), site)))
+                  && (owedBuilding == null
+                        || (siteLoaded(colony, owedBuilding) && resolvableByBuilder(colony, owedBuilding.getBuildingLevel()))))
             {
                 return true;
             }
@@ -1600,7 +1843,7 @@ public class UpgradeDirector
                 continue;
             }
 
-            if (hasOpenOrder(building, openOrders) || parked(colony, site) || stillRefused(colony, site))
+            if (hasOpenOrder(building, openOrders) || parked(colony, site) || stillRefused(colony, site) || !siteLoaded(colony, building))
             {
                 continue;
             }
@@ -1618,11 +1861,11 @@ public class UpgradeDirector
             }
 
             if (!passesWorkOrderGates(colony, building, WorkOrderType.REPAIR)
-                  || !resolvableByBuilder(colony, building.getBuildingLevel(), site))
+                  || !resolvableByBuilder(colony, building.getBuildingLevel()))
             {
                 continue;
             }
-            ColonyAutopilot.LOGGER.info("[{}] requesting repair of {}", colony.getName(), building.getBuildingDisplayName());
+            ColonyAutopilot.LOGGER.info("[{}] requesting repair of {}", colony.getName(), SiteSelector.plainName(building));
             building.requestRepair(BlockPos.ZERO);
 
             if (hasOpenOrder(building, colony.getWorkManager().getWorkOrdersOfType(WorkOrderBuilding.class)))
@@ -1641,6 +1884,19 @@ public class UpgradeDirector
         return building.isDeconstructed() && building.getColony() != null
                  && building.getColony().getWorld() instanceof ServerLevel level
                  && ColonyGrounds.get(level).isTornDown(building.getColony().getID(), building.getPosition());
+    }
+
+    private static boolean siteLoaded(final IColony colony, final IBuilding building)
+    {
+        final Tuple<BlockPos, BlockPos> corners = building.getCorners();
+        return colony.getWorld() instanceof ServerLevel level
+                 && WorldUtil.isChunkLoaded(level, building.getPosition().getX() >> 4, building.getPosition().getZ() >> 4)
+                 && DamageWatch.chunksLoaded(level, corners.getA().getX() - 1, corners.getA().getZ() - 1, corners.getB().getX() + 1, corners.getB().getZ() + 1);
+    }
+
+    static int ticksLived(final ServerLevel level, final ICitizenData citizen)
+    {
+        return citizen.getEntity().filter(e -> level.isPositionEntityTicking(e.blockPosition())).map(e -> e.tickCount).orElse(-1);
     }
 
     boolean orderable(final IColony colony, final IBuilding building)
@@ -1668,8 +1924,7 @@ public class UpgradeDirector
 
         for (final IBuilding hut : colony.getServerBuildingManager().getBuildings().values())
         {
-            if (hut instanceof BuildingBuilder && hut.getBuildingLevel() > 0 && !tornDown(hut)
-                  && hut.getPosition().distSqr(building.getPosition()) <= SiteSelector.BUILDER_RANGE_SQ)
+            if (hut instanceof BuildingBuilder && hut.getBuildingLevel() > 0 && !tornDown(hut))
             {
                 return true;
             }
@@ -1679,7 +1934,8 @@ public class UpgradeDirector
 
     private boolean readyForOrder(final IColony colony, final IBuilding building, final List<WorkOrderBuilding> openOrders)
     {
-        if (hasOpenOrder(building, openOrders) || tornDown(building))
+
+        if (hasOpenOrder(building, openOrders) || tornDown(building) || !siteLoaded(colony, building))
         {
             return false;
         }
@@ -1728,7 +1984,7 @@ public class UpgradeDirector
             for (final BlockPos towerPos : barracks.getTowers())
             {
                 final IBuilding tower = colony.getServerBuildingManager().getBuilding(towerPos);
-                if (tower != null && tower.getBuildingLevel() < building.getBuildingLevel())
+                if (tower != null && !tornDown(tower) && tower.getBuildingLevel() < building.getBuildingLevel())
                 {
                     return false;
                 }

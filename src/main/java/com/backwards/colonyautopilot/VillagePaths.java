@@ -31,6 +31,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 
 final class VillagePaths
 {
@@ -56,9 +57,9 @@ final class VillagePaths
     }
 
     static List<BlockPos> connect(final ServerLevel level, final BlockPos start, final boolean fromDoor, final BlockPos center,
-      final List<SiteSelector.Footprint> obstacles, final List<SiteSelector.Footprint> shields, final Set<Long> liveRoads,
-      final Map<Long, Integer> junctions, final Set<Long> previous, final List<int[]> route, final Set<Long> fresh, final Set<Long> blind,
-      final int zone, final int lampSpacing)
+      final List<SiteSelector.Footprint> obstacles, final List<SiteSelector.Footprint> shields, final List<SiteSelector.Footprint> fisherWater,
+      final Set<Long> liveRoads, final Map<Long, Integer> junctions, final Set<Long> previous, final List<int[]> route, final Set<Long> fresh, final Set<Long> blind,
+      final int zone, final int lampSpacing, final Set<Long> laidInWater)
     {
         final List<BlockPos> painted = new ArrayList<>();
         final int dx = center.getX() - start.getX();
@@ -91,6 +92,12 @@ final class VillagePaths
 
         final boolean[] roadbed = new boolean[steps + 1];
 
+        final boolean[] water = new boolean[steps + 1];
+        final boolean[] boardwalk = new boolean[steps + 1];
+
+        final int[] waterTop = new int[steps + 1];
+        Arrays.fill(waterTop, Integer.MIN_VALUE);
+
         final boolean[] cutThrough = new boolean[steps + 1];
         for (int i = 0; i <= steps; i++)
         {
@@ -108,16 +115,7 @@ final class VillagePaths
                 skyBlind[i] = true;
                 continue;
             }
-            boolean roofed = false;
-            for (final SiteSelector.Footprint box : obstacles)
-            {
-                if (box.intersects(x, z, x, z))
-                {
-                    roofed = true;
-                    break;
-                }
-            }
-            if (roofed)
+            if (SiteSelector.insideAny(obstacles, x, z))
             {
                 surface[i] = Integer.MIN_VALUE;
                 continue;
@@ -135,8 +133,22 @@ final class VillagePaths
             }
             if (crownFluid.isSource())
             {
-                surface[i] = top + 1;
+                water[i] = WaterRescue.openWater(crown) && !nearShieldedWater(level, fisherWater, x, top, z, true);
+                boardwalk[i] = !water[i];
+                surface[i] = water[i] ? top : top + 1;
+                waterTop[i] = top;
                 continue;
+            }
+
+            if (previous != null && previous.contains(BlockPos.asLong(x, top, z)) && inWaterLayer(level, shields, new BlockPos(x, top, z), Integer.MIN_VALUE))
+            {
+                waterTop[i] = top;
+                if (nearShieldedWater(level, fisherWater, x, top, z, false))
+                {
+                    boardwalk[i] = true;
+                    surface[i] = top + 1;
+                    continue;
+                }
             }
             if (top > skyCeiling && !SiteSelector.solidBeneath(level, x, z, top, skyProbe))
             {
@@ -167,7 +179,7 @@ final class VillagePaths
                 {
                     if (skyBlind[i] || !WorldUtil.isChunkLoaded(level, columns.get(i)[0] >> 4, columns.get(i)[1] >> 4))
                     {
-                        markBlind(blind, columns.get(i), sides[i], half);
+                        markBlind(blind, columns, sides, i, half);
                     }
                 }
             }
@@ -270,8 +282,13 @@ final class VillagePaths
                 median = surface[i] == Integer.MIN_VALUE ? low : Mth.clamp(surface[i], low, window[measured / 2]);
             }
 
-            final boolean standing = roadbed[i] && Math.abs(surface[i] - previousY) <= 1;
+            final boolean standing = (roadbed[i] || water[i]) && Math.abs(surface[i] - previousY) <= 1;
             planned[i] = Mth.clamp(standing ? surface[i] : median, previousY - 1, previousY + 1);
+
+            if (boardwalk[i] && surface[i] <= previousY + 1)
+            {
+                planned[i] = Math.max(planned[i], surface[i]);
+            }
             if (climbing)
             {
                 planned[i] = previousY + 1;
@@ -285,7 +302,7 @@ final class VillagePaths
             cutThrough[i] = fromDoor && route == null && roadbed[i] && liveRoads.contains(BlockPos.asLong(x, 0, z))
                               && surface[i] - planned[i] >= 1 && surface[i] - planned[i] <= CUT_THROUGH;
 
-            if (fromDoor && route == null && i > 0 && surface[i] != Integer.MIN_VALUE && planned[i] - surface[i] > FILL_DEPTH)
+            if (fromDoor && route == null && i > 0 && surface[i] != Integer.MIN_VALUE && planned[i] - surface[i] - (water[i] ? 1 : 0) > FILL_DEPTH)
             {
                 end = i - 1;
                 stop = "a drop the fill cannot reach";
@@ -344,6 +361,10 @@ final class VillagePaths
         final Set<Long> refusedTrunks = new HashSet<>();
 
         final int[] laneEnd = new int[end + 1];
+
+        final boolean counting = ColonyAutopilot.LOGGER.isDebugEnabled();
+        final List<BlockPos> inWater = new ArrayList<>();
+        int overWater = 0;
         for (int i = 0; i <= end; i++)
         {
             if (planned[i] == Integer.MIN_VALUE)
@@ -351,7 +372,7 @@ final class VillagePaths
 
                 if (blind != null)
                 {
-                    markBlind(blind, columns.get(i), sides[i], half);
+                    markBlind(blind, columns, sides, i, half);
                 }
                 continue;
             }
@@ -359,10 +380,12 @@ final class VillagePaths
             final int z = columns.get(i)[1];
             final int y = planned[i];
 
-            for (int w = -half; w <= half; w++)
+            final int[] corner = i < end && planned[i + 1] != Integer.MIN_VALUE ? cornerOf(columns, sides, i) : null;
+
+            for (int w = -half; w <= (corner != null ? half + 1 : half); w++)
             {
-                final int rx = x + sides[i].getStepX() * w;
-                final int rz = z + sides[i].getStepZ() * w;
+                final int rx = w > half ? corner[0] : x + sides[i].getStepX() * w;
+                final int rz = w > half ? corner[1] : z + sides[i].getStepZ() * w;
                 if (!WorldUtil.isChunkLoaded(level, rx >> 4, rz >> 4) || foreign.contains(ChunkPos.asLong(rx >> 4, rz >> 4)))
                 {
                     continue;
@@ -370,13 +393,67 @@ final class VillagePaths
 
                 final long column = BlockPos.asLong(rx, 0, rz);
                 if ((w != 0 && ((liveRoads.contains(column) && !cutThrough[i]) || centres.contains(column))) || paintedColumns.containsKey(column)
-                      || insideShields(obstacles, rx, rz))
+                      || (w > half && (liveRoads.contains(column) || bandLow.containsKey(column)))
+                      || SiteSelector.insideAny(obstacles, rx, rz))
                 {
                     continue;
                 }
-                final BlockPos ground = new BlockPos(rx, y, rz);
 
-                if (cutThrough[i])
+                int laneY = y;
+                if (w != 0)
+                {
+                    final int laneTop = RoadRouter.groundUnderDecks(level, rx, rz, skyProbe, fresh);
+                    final BlockPos lane = new BlockPos(rx, laneTop, rz);
+                    final BlockState laneCrown = level.getBlockState(lane);
+                    final BlockState laneUnder = level.getBlockState(lane.below());
+                    final boolean roadBlock = laneCrown.is(Blocks.DIRT_PATH) || laneCrown.is(Blocks.GLOWSTONE);
+                    final boolean onWater = laneUnder.getFluidState().is(FluidTags.WATER) && laneUnder.getFluidState().isSource();
+                    final boolean own = previous != null && previous.contains(lane.asLong());
+                    final boolean recorded = own && laidInWater != null && laidInWater.contains(lane.asLong());
+
+                    if (laneTop == y - 1 && (WaterRescue.openWater(laneCrown) || (roadBlock && (onWater || recorded || waterBeside(level, rx, laneTop, rz, true, null))))
+                          && !nearShieldedWater(level, fisherWater, rx, laneTop, rz, !(own && roadBlock)))
+                    {
+                        laneY = laneTop;
+                    }
+                    else if (laneTop == y - 1 && own && roadBlock && onWater && !inWaterLayer(level, shields, lane, waterTop[i]))
+                    {
+
+                        laneY = laneTop;
+                    }
+                    else if (laneTop == y + 1 && own && roadBlock && onWater
+                               && (!WaterRescue.openWater(laneUnder) || nearShieldedWater(level, fisherWater, rx, laneTop - 1, rz, true)))
+                    {
+                        laneY = laneTop;
+                    }
+                    else if (laneTop == y && laneCrown.getFluidState().is(FluidTags.WATER) && laneCrown.getFluidState().isSource()
+                               && (!WaterRescue.openWater(laneCrown) || nearShieldedWater(level, fisherWater, rx, laneTop, rz, true)))
+                    {
+                        laneY = y + 1;
+                    }
+                    else if (laneTop == y && own && inWaterLayer(level, shields, lane, waterTop[i]) && nearShieldedWater(level, fisherWater, rx, laneTop, rz, false))
+                    {
+                        laneY = y + 1;
+                    }
+
+                    if (w > half && (laneTop > laneY || Math.abs(laneY - planned[i + 1]) > 1))
+                    {
+                        continue;
+                    }
+
+                    if (w > half && !level.getEntitiesOfClass(net.minecraft.world.entity.LivingEntity.class,
+                          new net.minecraft.world.phys.AABB(rx, Math.min(laneTop + 1, laneY), rz, rx + 1, laneY + 0.9, rz + 1)).isEmpty())
+                    {
+                        if (blind != null)
+                        {
+                            blind.add(column);
+                        }
+                        continue;
+                    }
+                }
+                final BlockPos ground = new BlockPos(rx, laneY, rz);
+
+                if (cutThrough[i] && w <= half)
                 {
                     for (int up = 1; up <= CUT_THROUGH + 1; up++)
                     {
@@ -399,11 +476,53 @@ final class VillagePaths
                     }
                 }
 
-                final Paved paved = pave(level, ground, previous, columns.get(i).length > 2 ? RoadRouter.STAIR_FILL : FILL_DEPTH);
+                final BlockPos below = ground.below();
+                final boolean recordedUnder = laidInWater != null && previous != null && previous.contains(below.asLong()) && laidInWater.contains(below.asLong())
+                                                && (level.getBlockState(below).is(Blocks.DIRT_PATH) || level.getBlockState(below).is(Blocks.GLOWSTONE))
+                                                && (level.getBlockState(below.below()).getFluidState().is(FluidTags.WATER) || !level.getBlockState(below.below()).canBeReplaced())
+                                                && !openBeside(level, below.getX(), below.getY(), below.getZ());
+                final boolean waterUnder = recordedUnder || previous != null && previous.contains(below.asLong()) && inWaterLayer(level, shields, below, waterTop[i]);
+
+                final BlockState before = level.getBlockState(ground);
+                final boolean intoWater = WaterRescue.openWater(before);
+                final FluidState beneath = counting && !intoWater && before.isAir() ? level.getBlockState(below).getFluidState() : null;
+                final boolean ontoWater = counting && waterUnder || beneath != null && beneath.is(FluidTags.WATER) && beneath.isSource();
+
+                final boolean ownInLayer = laidInWater != null && !intoWater && previous != null && previous.contains(ground.asLong())
+                                             && inWaterLayer(level, shields, ground, waterTop[i]) && !openBeside(level, rx, laneY, rz);
+
+                final Paved paved = pave(level, ground, previous, columns.get(i).length > 2 ? RoadRouter.STAIR_FILL : FILL_DEPTH, waterUnder);
+                if (laidInWater != null)
+                {
+                    if (waterUnder)
+                    {
+                        laidInWater.remove(below.asLong());
+                    }
+                    if (paved != Paved.NONE)
+                    {
+                        if (intoWater || ownInLayer)
+                        {
+                            laidInWater.add(ground.asLong());
+                        }
+                        else if (!before.is(Blocks.DIRT_PATH) && !before.is(Blocks.GLOWSTONE))
+                        {
+
+                            laidInWater.remove(ground.asLong());
+                        }
+                    }
+                }
                 if (paved != Paved.NONE)
                 {
                     painted.add(ground);
-                    paintedColumns.put(column, y);
+                    paintedColumns.put(column, ground.getY());
+                    if (counting && intoWater)
+                    {
+                        inWater.add(ground);
+                    }
+                    else if (ontoWater)
+                    {
+                        overWater++;
+                    }
                 }
             }
             laneEnd[i] = painted.size();
@@ -412,13 +531,29 @@ final class VillagePaths
             {
                 final int cx = x + sides[i].getStepX() * w;
                 final int cz = z + sides[i].getStepZ() * w;
-                if (!WorldUtil.isChunkLoaded(level, cx >> 4, cz >> 4) || foreign.contains(ChunkPos.asLong(cx >> 4, cz >> 4)) || insideShields(shields, cx, cz))
+                if (!WorldUtil.isChunkLoaded(level, cx >> 4, cz >> 4) || foreign.contains(ChunkPos.asLong(cx >> 4, cz >> 4)) || SiteSelector.insideAny(shields, cx, cz))
                 {
                     continue;
                 }
                 final Integer roadAbove = lanes.get(BlockPos.asLong(cx, 0, cz));
                 clearColumn(level, new BlockPos(cx, y, cz), shields, roadAbove != null && roadAbove > y ? roadAbove : null, previous, refusedTrunks);
             }
+        }
+        if (!inWater.isEmpty() || overWater > 0)
+        {
+
+            int wayOut = 0;
+            for (final BlockPos lane : inWater)
+            {
+                if (WaterRescue.climbableBank(level, lane))
+                {
+                    wayOut++;
+                }
+            }
+            ColonyAutopilot.LOGGER.debug("carve from {} toward {}: {} lane(s) laid in the water's top block ({} of them a way out of the water), "
+                                           + "{} laid a block over the water (a fisher's hut's water or its dug pond within two "
+                                           + "blocks, a waterlogged block, a bubble column, or a step down off a bank)",
+              start.toShortString(), center.toShortString(), inWater.size(), wayOut, overWater);
         }
 
         final BlockPos[][] spots = new BlockPos[end + 1][];
@@ -446,9 +581,9 @@ final class VillagePaths
                 final BlockPos base = new BlockPos(x + sides[i].getStepX() * shoulder, y, z + sides[i].getStepZ() * shoulder);
                 final long cell = BlockPos.asLong(base.getX(), 0, base.getZ());
                 final Integer low = bandLow.get(cell);
-                if (!lanes.containsKey(cell) && (low == null || y < low + 1 || y > bandHigh.get(cell) + CLEAR_HEIGHT + 1)
+                if (!lanes.containsKey(cell) && !paintedColumns.containsKey(cell) && (low == null || y < low + 1 || y > bandHigh.get(cell) + CLEAR_HEIGHT + 1)
                       && WorldUtil.isChunkLoaded(level, base.getX() >> 4, base.getZ() >> 4) && !foreign.contains(ChunkPos.asLong(base.getX() >> 4, base.getZ() >> 4))
-                      && !insideShields(obstacles, base.getX(), base.getZ()))
+                      && !SiteSelector.insideAny(obstacles, base.getX(), base.getZ()))
                 {
                     spots[i][k] = base;
                 }
@@ -544,12 +679,29 @@ final class VillagePaths
         return true;
     }
 
-    private static void markBlind(final Set<Long> blind, final int[] column, final Direction side, final int half)
+    private static void markBlind(final Set<Long> blind, final List<int[]> columns, final Direction[] sides, final int i, final int half)
     {
         for (int w = -half - 1; w <= half + 1; w++)
         {
-            blind.add(BlockPos.asLong(column[0] + side.getStepX() * w, 0, column[1] + side.getStepZ() * w));
+            blind.add(BlockPos.asLong(columns.get(i)[0] + sides[i].getStepX() * w, 0, columns.get(i)[1] + sides[i].getStepZ() * w));
         }
+        for (int k = Math.max(0, i - 1); k <= Math.min(i, columns.size() - 2); k++)
+        {
+            final int[] corner = cornerOf(columns, sides, k);
+            if (corner != null)
+            {
+                blind.add(BlockPos.asLong(corner[0], 0, corner[1]));
+            }
+        }
+    }
+
+    private static int[] cornerOf(final List<int[]> columns, final Direction[] sides, final int k)
+    {
+        final int[] from = columns.get(k);
+        final int[] to = columns.get(k + 1);
+        return Math.abs(to[0] - from[0]) == 1 && Math.abs(to[1] - from[1]) == 1 && sides[k].getAxis() != sides[k + 1].getAxis()
+                 ? new int[] {sides[k].getStepX() == 0 ? to[0] : from[0], sides[k].getStepZ() == 0 ? to[1] : from[1]}
+                 : null;
     }
 
     private static Set<Long> foreignChunks(final ServerLevel level, final BlockPos start, final boolean fromDoor, final BlockPos center,
@@ -573,6 +725,12 @@ final class VillagePaths
             for (int w = -half - 1; w <= half + 1; w++)
             {
                 touched.add(ChunkPos.asLong((columns.get(i)[0] + sides[i].getStepX() * w) >> 4, (columns.get(i)[1] + sides[i].getStepZ() * w) >> 4));
+            }
+
+            final int[] corner = i + 1 < columns.size() ? cornerOf(columns, sides, i) : null;
+            if (corner != null)
+            {
+                touched.add(ChunkPos.asLong(corner[0] >> 4, corner[1] >> 4));
             }
         }
         final Set<Long> foreign = new HashSet<>();
@@ -627,7 +785,8 @@ final class VillagePaths
                  : (dx >= 0 ? Direction.EAST : Direction.WEST);
     }
 
-    static List<BlockPos> erase(final ServerLevel level, final List<BlockPos> blocks, final Set<Long> spare, final Set<Long> blind)
+    static List<BlockPos> erase(final ServerLevel level, final List<BlockPos> blocks, final Set<Long> spare, final Set<Long> blind,
+      final Set<Long> laidInWater)
     {
         final List<BlockPos> kept = new ArrayList<>();
 
@@ -635,6 +794,68 @@ final class VillagePaths
         for (final BlockPos pos : blocks)
         {
             old.add(pos.asLong());
+        }
+
+        final Set<Long> afloat = new HashSet<>();
+        for (final BlockPos pos : blocks)
+        {
+            if (!spare.contains(pos.asLong()) && WorldUtil.isChunkLoaded(level, pos.getX() >> 4, pos.getZ() >> 4)
+                  && !blind.contains(BlockPos.asLong(pos.getX(), 0, pos.getZ())))
+            {
+                final BlockState state = level.getBlockState(pos);
+                final FluidState under = level.getBlockState(pos.below()).getFluidState();
+                if ((state.is(Blocks.DIRT_PATH) || state.is(Blocks.GRAVEL) || state.is(Blocks.GLOWSTONE)) && under.is(FluidTags.WATER) && under.isSource())
+                {
+                    afloat.add(pos.asLong());
+                }
+            }
+        }
+        final Set<Long> waterBack = new HashSet<>();
+        final Set<Long> judged = new HashSet<>();
+        for (final long first : afloat)
+        {
+            if (!judged.add(first))
+            {
+                continue;
+            }
+            final List<Long> patch = new ArrayList<>();
+            final Deque<Long> queue = new ArrayDeque<>();
+            queue.add(first);
+            boolean water = false;
+            boolean deck = false;
+            while (!queue.isEmpty())
+            {
+                final BlockPos pos = BlockPos.of(queue.poll());
+                patch.add(pos.asLong());
+                water = water || waterBeside(level, pos.getX(), pos.getY(), pos.getZ(), false, null);
+                for (final Direction side : Direction.Plane.HORIZONTAL)
+                {
+                    final BlockPos next = pos.relative(side);
+                    if (afloat.contains(next.asLong()))
+                    {
+                        if (judged.add(next.asLong()))
+                        {
+                            queue.add(next.asLong());
+                        }
+                        continue;
+                    }
+                    if (!WorldUtil.isChunkLoaded(level, next.getX() >> 4, next.getZ() >> 4))
+                    {
+                        deck = true;
+                        continue;
+                    }
+                    final BlockState beside = level.getBlockState(next);
+                    final FluidState lower = level.getBlockState(next.below()).getFluidState();
+                    if (!WaterRescue.openWater(beside) && (beside.isAir() || beside.canBeReplaced()) && lower.is(FluidTags.WATER) && lower.isSource())
+                    {
+                        deck = true;
+                    }
+                }
+            }
+            if (water && !deck)
+            {
+                waterBack.addAll(patch);
+            }
         }
         for (final BlockPos pos : blocks)
         {
@@ -659,11 +880,16 @@ final class VillagePaths
             {
                 continue;
             }
+
+            final boolean wasWater = laidInWater != null && laidInWater.remove(pos.asLong());
             if (state.is(Blocks.DIRT_PATH) || state.is(Blocks.GRAVEL) || state.is(Blocks.GLOWSTONE))
             {
                 final BlockState below = level.getBlockState(pos.below());
+                final BlockState carried = level.getBlockState(pos.above());
+                final boolean holdsUp = supportsRoad(level, pos, old)
+                                          || !(carried.isAir() || carried.canBeReplaced() || carried.is(Blocks.OAK_FENCE) || carried.is(Blocks.GLOWSTONE));
                 final BlockState replacement;
-                if (below.is(Blocks.DIRT_PATH))
+                if (below.is(Blocks.DIRT_PATH) || (below.is(Blocks.GLOWSTONE) && spare.contains(pos.below().asLong())))
                 {
 
                     replacement = Blocks.AIR.defaultBlockState();
@@ -671,13 +897,24 @@ final class VillagePaths
                 else if (below.canBeReplaced() || !below.getFluidState().isEmpty())
                 {
 
-                    final BlockState carried = level.getBlockState(pos.above());
-                    replacement = supportsRoad(level, pos, old) || !(carried.isAir() || carried.canBeReplaced() || carried.is(Blocks.OAK_FENCE) || carried.is(Blocks.GLOWSTONE))
-                                    ? Blocks.DIRT.defaultBlockState() : Blocks.AIR.defaultBlockState();
+                    if (holdsUp)
+                    {
+                        replacement = Blocks.DIRT.defaultBlockState();
+                    }
+                    else if ((wasWater && below.getFluidState().is(FluidTags.WATER)) || waterBack.contains(pos.asLong()))
+                    {
+                        replacement = Blocks.WATER.defaultBlockState();
+                    }
+                    else
+                    {
+                        replacement = Blocks.AIR.defaultBlockState();
+                    }
                 }
                 else
                 {
-                    replacement = Blocks.DIRT.defaultBlockState();
+
+                    replacement = wasWater && !holdsUp && !openBeside(level, pos.getX(), pos.getY(), pos.getZ())
+                                    ? Blocks.WATER.defaultBlockState() : Blocks.DIRT.defaultBlockState();
                 }
                 WorldUtil.setBlockState(level, pos, replacement);
             }
@@ -730,7 +967,7 @@ final class VillagePaths
         {
             for (int z = box.minZ(); z <= box.maxZ(); z++)
             {
-                if (!WorldUtil.isChunkLoaded(level, x >> 4, z >> 4) || insideShields(foreign, x, z))
+                if (!WorldUtil.isChunkLoaded(level, x >> 4, z >> 4) || SiteSelector.insideAny(foreign, x, z))
                 {
                     continue;
                 }
@@ -765,9 +1002,11 @@ final class VillagePaths
         final BlockState existing = level.getBlockState(ground);
         final BlockState under = level.getBlockState(ground.below());
         if (existing.hasBlockEntity() || existing.is(Blocks.DIRT_PATH) || existing.is(Blocks.FARMLAND)
+              || (existing.getDestroySpeed(level, ground) < 0 && !existing.canBeReplaced())
               || !existing.getFluidState().isEmpty()
               || under.canBeReplaced())
         {
+
             return false;
         }
 
@@ -1026,11 +1265,11 @@ final class VillagePaths
         NONE, GROUND, DECK
     }
 
-    private static Paved pave(final ServerLevel level, final BlockPos ground, final Set<Long> previous, final int fillReach)
+    private static Paved pave(final ServerLevel level, final BlockPos ground, final Set<Long> previous, final int fillReach, final boolean waterUnder)
     {
         final BlockState existing = level.getBlockState(ground);
 
-        if (existing.hasBlockEntity())
+        if (existing.hasBlockEntity() || (existing.getDestroySpeed(level, ground) < 0 && !existing.canBeReplaced()))
         {
             return Paved.NONE;
         }
@@ -1040,7 +1279,12 @@ final class VillagePaths
             return Paved.NONE;
         }
         final BlockPos under = ground.below();
-        if (level.getBlockState(under).is(Blocks.DIRT_PATH))
+        if (waterUnder)
+        {
+
+            WorldUtil.setBlockState(level, under, Blocks.WATER.defaultBlockState());
+        }
+        else if (level.getBlockState(under).is(Blocks.DIRT_PATH))
         {
 
             if (previous == null || !previous.contains(under.asLong()))
@@ -1120,7 +1364,7 @@ final class VillagePaths
 
             if (state.isAir() || state.hasBlockEntity() || !state.getFluidState().isEmpty()
                   || state.is(Blocks.TORCH) || state.is(Blocks.OAK_FENCE) || state.is(Blocks.GLOWSTONE)
-                  || state.is(Blocks.DIRT_PATH))
+                  || state.is(Blocks.DIRT_PATH) || (state.getDestroySpeed(level, pos) < 0 && !state.canBeReplaced()))
             {
                 continue;
             }
@@ -1186,7 +1430,7 @@ final class VillagePaths
         }
     }
 
-    private static boolean holdsFluid(final ServerLevel level, final BlockPos pos)
+    static boolean holdsFluid(final ServerLevel level, final BlockPos pos)
     {
         if (!level.getBlockState(pos.above()).getFluidState().isEmpty())
         {
@@ -1250,7 +1494,7 @@ final class VillagePaths
 
     static boolean fellTree(final ServerLevel level, final BlockPos seed, final List<SiteSelector.Footprint> shields, final boolean bareTrunkOk)
     {
-        if (insideShields(shields, seed.getX(), seed.getZ()))
+        if (SiteSelector.insideAny(shields, seed.getX(), seed.getZ()))
         {
             return refused(seed, "the seed stands in a shielded footprint — somebody's wall", 0, 0);
         }
@@ -1275,7 +1519,7 @@ final class VillagePaths
                     {
                         final BlockPos next = log.offset(dx, dy, dz);
                         if (mass.contains(next) || !WorldUtil.isChunkLoaded(level, next.getX() >> 4, next.getZ() >> 4)
-                              || !level.getBlockState(next).is(BlockTags.LOGS) || insideShields(shields, next.getX(), next.getZ())
+                              || !level.getBlockState(next).is(BlockTags.LOGS) || SiteSelector.insideAny(shields, next.getX(), next.getZ())
                               || Math.abs(next.getX() - seed.getX()) > MASS_REACH || Math.abs(next.getZ() - seed.getZ()) > MASS_REACH
                               || next.getY() < seed.getY() - MASS_FLOOR || next.getY() > seed.getY() + 40)
                         {
@@ -1335,7 +1579,7 @@ final class VillagePaths
                 for (int dz = -hunt; dz <= hunt; dz++)
                 {
                     final int cx = log.getX() + dx, cz = log.getZ() + dz;
-                    if (shielded.computeIfAbsent(BlockPos.asLong(cx, 0, cz), c -> insideShields(shields, cx, cz)))
+                    if (shielded.computeIfAbsent(BlockPos.asLong(cx, 0, cz), c -> SiteSelector.insideAny(shields, cx, cz)))
                     {
                         continue;
                     }
@@ -1410,7 +1654,7 @@ final class VillagePaths
                 for (int dz = -3; dz <= 3; dz++)
                 {
                     final int cx = log.getX() + dx, cz = log.getZ() + dz;
-                    if (shielded.computeIfAbsent(BlockPos.asLong(cx, 0, cz), c -> insideShields(shields, cx, cz)) || insideShields(zones, cx, cz))
+                    if (shielded.computeIfAbsent(BlockPos.asLong(cx, 0, cz), c -> SiteSelector.insideAny(shields, cx, cz)) || SiteSelector.insideAny(zones, cx, cz))
                     {
                         continue;
                     }
@@ -1588,7 +1832,7 @@ final class VillagePaths
                     continue;
                 }
                 final int bx = beside.getX(), bz = beside.getZ();
-                if (shielded.computeIfAbsent(BlockPos.asLong(bx, 0, bz), c -> insideShields(shields, bx, bz)) && !insideShields(zones, bx, bz))
+                if (shielded.computeIfAbsent(BlockPos.asLong(bx, 0, bz), c -> SiteSelector.insideAny(shields, bx, bz)) && !SiteSelector.insideAny(zones, bx, bz))
                 {
                     continue;
                 }
@@ -1668,15 +1912,68 @@ final class VillagePaths
                  || state.is(BlockTags.SAND) || state.is(Blocks.GRAVEL) || state.is(Blocks.SNOW_BLOCK) || state.is(Blocks.ICE);
     }
 
-    private static boolean insideShields(final List<SiteSelector.Footprint> shields, final int x, final int z)
+    private static boolean nearShieldedWater(final ServerLevel level, final List<SiteSelector.Footprint> fisherWater, final int x, final int y, final int z,
+      final boolean unseen)
     {
-        for (final SiteSelector.Footprint box : shields)
+        for (final SiteSelector.Footprint box : fisherWater)
         {
-            if (box.intersects(x, z, x, z))
+            for (int cx = Math.max(box.minX(), x - 2); cx <= Math.min(box.maxX(), x + 2); cx++)
             {
-                return true;
+                for (int cz = Math.max(box.minZ(), z - 2); cz <= Math.min(box.maxZ(), z + 2); cz++)
+                {
+                    if (!WorldUtil.isChunkLoaded(level, cx >> 4, cz >> 4) ? unseen : level.getBlockState(new BlockPos(cx, y, cz)).getFluidState().is(FluidTags.WATER))
+                    {
+                        return true;
+                    }
+                }
             }
         }
         return false;
+    }
+
+    private static boolean waterBeside(final ServerLevel level, final int x, final int y, final int z, final boolean unseen,
+      final List<SiteSelector.Footprint> shields)
+    {
+        return anyBeside(level, x, y, z, unseen, shields, beside -> WaterRescue.openWater(beside) || beside.is(Blocks.ICE));
+    }
+
+    private static boolean openBeside(final ServerLevel level, final int x, final int y, final int z)
+    {
+        return anyBeside(level, x, y, z, true, null, beside -> !WaterRescue.openWater(beside) && (beside.isAir() || beside.canBeReplaced()));
+    }
+
+    private static boolean anyBeside(final ServerLevel level, final int x, final int y, final int z, final boolean unseen,
+      final List<SiteSelector.Footprint> shields, final Predicate<BlockState> test)
+    {
+        for (final Direction side : Direction.Plane.HORIZONTAL)
+        {
+            for (int out = 1; out <= 2; out++)
+            {
+                final int cx = x + side.getStepX() * out;
+                final int cz = z + side.getStepZ() * out;
+                if (!WorldUtil.isChunkLoaded(level, cx >> 4, cz >> 4))
+                {
+                    if (unseen)
+                    {
+                        return true;
+                    }
+                    continue;
+                }
+                final BlockState beside = level.getBlockState(new BlockPos(cx, y, cz));
+                if (test.test(beside) && (shields == null || !SiteSelector.insideAny(shields, cx, cz)))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean inWaterLayer(final ServerLevel level, final List<SiteSelector.Footprint> shields, final BlockPos pos, final int waterTop)
+    {
+        final BlockState state = level.getBlockState(pos);
+        final FluidState under = level.getBlockState(pos.below()).getFluidState();
+        return (state.is(Blocks.DIRT_PATH) || state.is(Blocks.GLOWSTONE)) && under.is(FluidTags.WATER) && under.isSource()
+                 && (pos.getY() == waterTop || waterBeside(level, pos.getX(), pos.getY(), pos.getZ(), false, shields));
     }
 }

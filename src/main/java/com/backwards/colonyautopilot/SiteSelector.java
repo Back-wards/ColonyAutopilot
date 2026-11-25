@@ -1,18 +1,24 @@
 // Colony Autopilot - created by Backwards - https://www.curseforge.com/members/backwards/projects - Copyright (C) 2026 Backwards - GPL-3.0
 package com.backwards.colonyautopilot;
 
+import com.minecolonies.api.MinecoloniesAPIProxy;
 import com.minecolonies.api.colony.IColony;
 import com.minecolonies.api.colony.IColonyManager;
 import com.minecolonies.api.colony.buildingextensions.IBuildingExtension;
 import com.minecolonies.api.colony.buildings.IBuilding;
+import com.minecolonies.api.colony.claim.IChunkClaimData;
 import com.minecolonies.api.util.WorldUtil;
+import com.minecolonies.api.util.constant.ColonyManagerConstants;
 import com.minecolonies.core.colony.buildings.workerbuildings.BuildingBuilder;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.util.Mth;
 import net.minecraft.util.Tuple;
 import net.minecraft.world.level.ChunkPos;
@@ -125,7 +131,8 @@ public final class SiteSelector
         int minZ = corners.getA().getZ();
         int maxX = corners.getB().getX();
         int maxZ = corners.getB().getZ();
-        if (maxX - minX < 2 && maxZ - minZ < 2)
+
+        if (maxX - minX < 2 && maxZ - minZ < 2 && (building.getBuildingLevel() <= 0 || BlockPos.ZERO.equals(building.getParent())))
         {
             final int guess = building.getBuildingType().getBuildingBlock() == com.minecolonies.api.blocks.ModBlocks.blockHutTownHall ? 20 : 8;
             final BlockPos pos = building.getPosition();
@@ -187,7 +194,9 @@ public final class SiteSelector
                 {
                     continue;
                 }
-                final IColony owner = IColonyManager.getInstance().getColonyByPosFromWorld(level, new BlockPos(chunkX << 4, 0, chunkZ << 4));
+                final IChunkClaimData claim = IColonyManager.getInstance().getClaimData(level.dimension(), new ChunkPos(chunkX, chunkZ));
+                final IColony owner = claim == null || claim.getOwningColony() == ColonyManagerConstants.NO_COLONY_ID
+                                        ? null : IColonyManager.getInstance().getColonyByWorld(claim.getOwningColony(), level);
                 if (owner != null && owner != colony)
                 {
                     claims.add(new Footprint(chunkX << 4, chunkZ << 4, (chunkX << 4) + 15, (chunkZ << 4) + 15));
@@ -225,7 +234,8 @@ public final class SiteSelector
       final boolean rangeExempt,
       final boolean fisher,
       final boolean farm,
-      final Set<Long> roadBand)
+      final Set<Long> roadBand,
+      final boolean claimEdge)
     {
         final BlockPos center = colony.getCenter();
         final int padding = AutopilotConfig.get(colony, AutopilotConfig.SITE_PADDING_BLOCKS);
@@ -253,6 +263,12 @@ public final class SiteSelector
         final Map<Long, List<int[]>> trunkGrid = wooded ? binTrunks(scanTrunks(level, center, maxRadius + TREE_REACH)) : Map.of();
         final Map<Long, Integer> heights = new HashMap<>();
 
+        final Long2ObjectMap<FarmFields.SurveyedCentre> fieldCentres = new Long2ObjectOpenHashMap<>();
+
+        final Long2ObjectMap<FishingPond.SurveyedColumn> waterColumns = new Long2ObjectOpenHashMap<>();
+
+        final Long2ObjectMap<Boolean> claimed = new Long2ObjectOpenHashMap<>();
+
         final Set<Long> frontierRing = AutopilotConfig.live(colony, AutopilotConfig.FRONTIER_TICKETS) ? new HashSet<>() : null;
 
         Result offLevelFallback = null;
@@ -265,6 +281,7 @@ public final class SiteSelector
         int sidewaysRadius = 0;
 
         Result secondChoice = null;
+        int secondRadius = 0;
         Result bestFacing = null;
         long bestFacingScore = Long.MIN_VALUE;
         for (int radius = MIN_RADIUS; radius <= maxRadius; radius += 4)
@@ -298,7 +315,7 @@ public final class SiteSelector
                     continue;
                 }
 
-                if (IColonyManager.getInstance().getColonyByPosFromWorld(level, candidate) != colony)
+                if (!ownChunk(level, colony, x >> 4, z >> 4, claimed))
                 {
                     continue;
                 }
@@ -313,7 +330,7 @@ public final class SiteSelector
                 {
                     final Placement placement = options.get(facing);
                     if (placement == null
-                          || !isAcceptable(level, colony, candidate, placement, facing, padding, maxVariance, staffedBuilders, clearance, rangeExempt, heights))
+                          || !isAcceptable(level, colony, candidate, placement, facing, padding, maxVariance, staffedBuilders, clearance, rangeExempt, heights, claimed, claimEdge))
                     {
                         continue;
                     }
@@ -356,10 +373,16 @@ public final class SiteSelector
                     if (!offLevel)
                     {
 
-                        if ((fisher && FishingPond.findTrustedWater(level, result.anchor()) == null)
-                              || (farm && !fieldReady(level, colony, result, options.get(result.facing()), occupied, roadBand, heights)))
+                        if ((fisher && FishingPond.scanTrustedWater(level, result.anchor(), waterColumns) == null)
+                              || (farm && !fieldReady(level, colony, result, options.get(result.facing()), occupied, roadBand, heights, fieldCentres)))
                         {
                             if (secondChoice == null)
+                            {
+                                secondChoice = result;
+                                secondRadius = radius;
+                            }
+                            else if (result.facing() == preferred && radius <= secondRadius + FACING_WINDOW
+                                       && secondChoice.facing() != facingToward(center, secondChoice.anchor().getX(), secondChoice.anchor().getZ()))
                             {
                                 secondChoice = result;
                             }
@@ -622,9 +645,11 @@ public final class SiteSelector
       final List<BlockPos> staffedBuilders,
       final List<Footprint> occupied,
       final boolean rangeExempt,
-      final Map<Long, Integer> heights)
+      final Map<Long, Integer> heights,
+      final Long2ObjectMap<Boolean> claimed,
+      final boolean claimEdge)
     {
-        if (!isPlaceableIgnoringTerrain(level, colony, candidate, placement, facing, padding, staffedBuilders, occupied, rangeExempt))
+        if (!isPlaceableIgnoringTerrain(level, colony, candidate, placement, facing, padding, staffedBuilders, occupied, rangeExempt, claimed, claimEdge))
         {
             return false;
         }
@@ -739,7 +764,7 @@ public final class SiteSelector
         return true;
     }
 
-    private static boolean insideAny(final List<Footprint> occupied, final int x, final int z)
+    static boolean insideAny(final List<Footprint> occupied, final int x, final int z)
     {
         for (final Footprint box : occupied)
         {
@@ -769,21 +794,20 @@ public final class SiteSelector
     {
         int y = from;
         final BlockPos.MutableBlockPos probe = new BlockPos.MutableBlockPos();
-        while (y > level.getMinBuildHeight() + 1)
+        while (y > level.getMinBuildHeight() + 1 && notGround(level.getBlockState(probe.set(x, y - 1, z))))
         {
-            final var below = level.getBlockState(probe.set(x, y - 1, z));
-            if (below.is(BlockTags.LOGS) || below.is(BlockTags.LEAVES)
-                  || STANDING_CLUTTER.contains(below.getBlock())
-                  || (below.getFluidState().isEmpty()
-                        && !below.is(net.minecraft.world.level.block.Blocks.POWDER_SNOW)
-                        && (below.canBeReplaced() || !below.blocksMotion())))
-            {
-                y--;
-                continue;
-            }
-            break;
+            y--;
         }
         return y;
+    }
+
+    static boolean notGround(final BlockState state)
+    {
+        return state.is(BlockTags.LOGS) || state.is(BlockTags.LEAVES)
+                 || STANDING_CLUTTER.contains(state.getBlock())
+                 || (state.getFluidState().isEmpty()
+                       && !state.is(Blocks.POWDER_SNOW)
+                       && (state.canBeReplaced() || !state.blocksMotion()));
     }
 
     private static int groundHeight(final ServerLevel level, final int x, final int z, final Map<Long, Integer> cache)
@@ -870,7 +894,12 @@ public final class SiteSelector
 
         final List<Footprint> clearance = new ArrayList<>(prep.occupied());
         clearance.addAll(doorsteps);
+
+        final List<Footprint> corridorWalls = new ArrayList<>(prep.occupied());
+        corridorWalls.addAll(foreignClaims(level, colony, center.getX() - maxRadius - 1, center.getZ() - maxRadius - 1,
+          center.getX() + maxRadius + 1, center.getZ() + maxRadius + 1));
         final Map<Long, Integer> heights = new HashMap<>();
+        final Long2ObjectMap<Boolean> claimed = new Long2ObjectOpenHashMap<>();
 
         TerraformSite best = null;
         int bestCost = Integer.MAX_VALUE;
@@ -889,7 +918,7 @@ public final class SiteSelector
                     continue;
                 }
                 final BlockPos candidate = new BlockPos(x, groundHeight(level, x, z, heights), z);
-                if (!isPlaceableIgnoringTerrain(level, colony, candidate, placement, facing, effectivePad, prep.staffedBuilders(), clearance, rangeExempt)
+                if (!isPlaceableIgnoringTerrain(level, colony, candidate, placement, facing, effectivePad, prep.staffedBuilders(), clearance, rangeExempt, claimed, false)
                       || (!forced && localProminence(level, candidate, placement, candidate.getY(), heights) > MAX_PROMINENCE))
                 {
                     continue;
@@ -907,6 +936,7 @@ public final class SiteSelector
 
                 final List<Integer> groundHeights = new ArrayList<>();
                 int wet = 0;
+                int hardTop = Integer.MIN_VALUE;
                 boolean fullyLoaded = true;
                 for (final int sx : sampleCoords(footMinX, footMaxX, Math.max(2, placement.sizeX() / 3)))
                 {
@@ -919,9 +949,16 @@ public final class SiteSelector
                         }
                         final int ground = groundHeight(level, sx, sz, heights) - 1;
                         groundHeights.add(ground);
-                        if (!level.getBlockState(new BlockPos(sx, ground, sz)).getFluidState().isEmpty())
+                        final BlockPos sample = new BlockPos(sx, ground, sz);
+                        final BlockState top = level.getBlockState(sample);
+                        if (!top.getFluidState().isEmpty())
                         {
                             wet++;
+                        }
+
+                        else if (top.getDestroySpeed(level, sample) < 0 && !top.canBeReplaced())
+                        {
+                            hardTop = Math.max(hardTop, ground);
                         }
                     }
                     if (!fullyLoaded)
@@ -1004,6 +1041,11 @@ public final class SiteSelector
                     targetY = waterTop;
                 }
 
+                if (hardTop > targetY)
+                {
+                    continue;
+                }
+
                 int cost = wet * 8;
                 boolean tooSteep = false;
                 for (final int ground : groundHeights)
@@ -1034,7 +1076,7 @@ public final class SiteSelector
                 examined++;
 
                 final List<int[]> ramp = rampCorridor(level, center, villageY, hallBox,
-                  new BlockPos(candidate.getX(), targetY + 1, candidate.getZ()), plot, prep.occupied(), forced, heights);
+                  new BlockPos(candidate.getX(), targetY + 1, candidate.getZ()), plot, corridorWalls, forced, heights);
                 if (ramp == null)
                 {
                     continue;
@@ -1068,7 +1110,7 @@ public final class SiteSelector
     }
 
     private static boolean fieldReady(final ServerLevel level, final IColony colony, final Result fit, final Placement placement,
-      final List<Footprint> occupied, final Set<Long> roadBand, final Map<Long, Integer> heights)
+      final List<Footprint> occupied, final Set<Long> roadBand, final Map<Long, Integer> heights, final Long2ObjectMap<FarmFields.SurveyedCentre> fieldCentres)
     {
         final int minX = fit.anchor().getX() - placement.offsetX(), minZ = fit.anchor().getZ() - placement.offsetZ();
         final Footprint plot = new Footprint(minX, minZ, minX + placement.sizeX() - 1, minZ + placement.sizeZ() - 1);
@@ -1078,7 +1120,7 @@ public final class SiteSelector
         }
         final List<Footprint> obstacles = new ArrayList<>(occupied);
         obstacles.add(plot);
-        return FarmFields.naturalFieldPlot(level, colony, fit.anchor(), obstacles, roadBand) != null;
+        return FarmFields.naturalFieldPlot(level, colony, fit.anchor(), obstacles, roadBand, fieldCentres) != null;
     }
 
     private static int gradedTop(final ServerLevel level, final int x, final int z, final Footprint plot, final int groundY, final Footprint pad,
@@ -1252,7 +1294,9 @@ public final class SiteSelector
       final int padding,
       final List<BlockPos> staffedBuilders,
       final List<Footprint> occupied,
-      final boolean rangeExempt)
+      final boolean rangeExempt,
+      final Long2ObjectMap<Boolean> claimed,
+      final boolean claimEdge)
     {
 
         if (!rangeExempt && !staffedBuilders.isEmpty())
@@ -1281,8 +1325,7 @@ public final class SiteSelector
         {
             for (int cz = padMinZ >> 4; cz <= padMaxZ >> 4; cz++)
             {
-                if (!WorldUtil.isChunkLoaded(level, cx, cz)
-                      || IColonyManager.getInstance().getColonyByPosFromWorld(level, new BlockPos(cx << 4, candidate.getY(), cz << 4)) != colony)
+                if (!ownChunk(level, colony, cx, cz, claimed) && !(claimEdge && claimable(level, colony, cx, cz)))
                 {
                     return false;
                 }
@@ -1297,6 +1340,36 @@ public final class SiteSelector
             }
         }
         return true;
+    }
+
+    private static boolean ownChunk(final ServerLevel level, final IColony colony, final int chunkX, final int chunkZ, final Long2ObjectMap<Boolean> claimed)
+    {
+        final long chunk = ChunkPos.asLong(chunkX, chunkZ);
+        Boolean ours = claimed.get(chunk);
+        if (ours == null)
+        {
+            ours = WorldUtil.isChunkLoaded(level, chunkX, chunkZ)
+                     && IColonyManager.getInstance().getColonyByPosFromWorld(level, new BlockPos(chunkX << 4, 0, chunkZ << 4)) == colony;
+            claimed.put(chunk, ours);
+        }
+        return ours;
+    }
+
+    private static boolean claimable(final ServerLevel level, final IColony colony, final int chunkX, final int chunkZ)
+    {
+        if (!WorldUtil.isChunkLoaded(level, chunkX, chunkZ))
+        {
+            return false;
+        }
+        final IChunkClaimData claim = IColonyManager.getInstance().getClaimData(level.dimension(), new ChunkPos(chunkX, chunkZ));
+        if (claim != null && claim.getOwningColony() != ColonyManagerConstants.NO_COLONY_ID)
+        {
+            return false;
+        }
+        final int limit = MinecoloniesAPIProxy.getInstance().getConfig().getServer().maxColonySize.get();
+        final BlockPos centre = colony.getCenter();
+        return limit == 0
+                 || new BlockPos(chunkX << 4, 0, chunkZ << 4).distSqr(new BlockPos(centre.getX(), 0, centre.getZ())) <= Math.pow(limit * 16, 2);
     }
 
     static int yardTop(final ServerLevel level, final ColonyGrounds grounds, final int colonyId, final BlockPos target, final Footprint box)

@@ -14,6 +14,7 @@ import com.minecolonies.api.util.Pond;
 import com.minecolonies.api.util.Tuple;
 import com.minecolonies.api.util.WorldUtil;
 import com.minecolonies.core.colony.jobs.JobFisherman;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.GlobalPos;
@@ -106,7 +107,7 @@ public final class FishingPond
                 }
                 fisher.removeFromPonds(pond);
                 ColonyAutopilot.LOGGER.info("[{}] pruned a dead pond at {} from the {}'s memory — {}",
-                  colony.getName(), water.toShortString(), hut.getBuildingDisplayName(),
+                  colony.getName(), water.toShortString(), SiteSelector.plainName(hut),
                   waterDead ? "its water is gone" : "its shore is buried");
             }
         }
@@ -205,14 +206,10 @@ public final class FishingPond
         return waters;
     }
 
-    static void reseal(final ServerLevel level, final IColony colony, final IBuilding hut, final List<SiteSelector.Footprint> shields)
+    static void reseal(final ServerLevel level, final IColony colony, final List<SiteSelector.Footprint> shields)
     {
         final ColonyGrounds grounds = ColonyGrounds.get(level);
         final int colonyId = colony.getID();
-        for (final BlockPos water : memorizedWaters(hut))
-        {
-            adoptDugPond(level, colony, grounds, hut, water);
-        }
         for (final long packed : grounds.ponds(colonyId))
         {
             final BlockPos corner = BlockPos.of(packed);
@@ -253,7 +250,7 @@ public final class FishingPond
             {
                 for (int z = minZ - 1; z <= maxZ + 1; z++)
                 {
-                    if (!WorldUtil.isChunkLoaded(level, x >> 4, z >> 4) || shielded(x, z, shields))
+                    if (!WorldUtil.isChunkLoaded(level, x >> 4, z >> 4) || SiteSelector.insideAny(shields, x, z))
                     {
                         continue;
                     }
@@ -313,81 +310,6 @@ public final class FishingPond
                   colony.getName(), corner.toShortString(), waterRestored, rimClosed, debris, flushed);
             }
         }
-    }
-
-    private static void adoptDugPond(final ServerLevel level, final IColony colony, final ColonyGrounds grounds, final IBuilding hut, final BlockPos water)
-    {
-        if (!WorldUtil.isChunkLoaded(level, water.getX() >> 4, water.getZ() >> 4))
-        {
-            return;
-        }
-
-        final BlockPos surface = level.getFluidState(water).is(FluidTags.WATER) ? water : water.below();
-        if (!level.getFluidState(surface).is(FluidTags.WATER))
-        {
-            return;
-        }
-        final int y = surface.getY();
-        for (final long packed : grounds.ponds(colony.getID()))
-        {
-            final BlockPos corner = BlockPos.of(packed);
-            if (corner.getY() == y && water.getX() >= corner.getX() && water.getX() < corner.getX() + POND_SIZE
-                  && water.getZ() >= corner.getZ() && water.getZ() < corner.getZ() + POND_SIZE)
-            {
-                return;
-            }
-        }
-        final SiteSelector.Footprint footprint = SiteSelector.boxOf(hut);
-        final BlockPos.MutableBlockPos probe = new BlockPos.MutableBlockPos();
-        for (final Direction side : Direction.Plane.HORIZONTAL)
-        {
-            final BlockPos corner = pondCorner(footprint, side);
-            final int cx = corner.getX();
-            final int cz = corner.getZ();
-            if (water.getX() < cx || water.getX() >= cx + POND_SIZE || water.getZ() < cz || water.getZ() >= cz + POND_SIZE
-                  || !cornersLoaded(level, cx, cz, cx + POND_SIZE - 1, cz + POND_SIZE - 1))
-            {
-                continue;
-            }
-            int floor = 0;
-            int wet = 0;
-            for (int x = cx; x < cx + POND_SIZE; x++)
-            {
-                for (int z = cz; z < cz + POND_SIZE; z++)
-                {
-
-                    final BlockState bed = level.getBlockState(probe.set(x, y - 2, z));
-                    if (bed.isSolidRender(level, probe) || bed.is(Blocks.GLOWSTONE))
-                    {
-                        floor++;
-                    }
-                    if (level.getFluidState(probe.set(x, y - 1, z)).is(FluidTags.WATER))
-                    {
-                        wet++;
-                    }
-                }
-            }
-            if (floor == POND_SIZE * POND_SIZE && wet >= POND_SIZE * POND_SIZE - 9)
-            {
-                final BlockPos dug = new BlockPos(cx, y, cz);
-                grounds.addPond(colony.getID(), dug);
-                ColonyAutopilot.LOGGER.info("[{}] adopted the village's own pond at {} into the grounds record (dug before the record existed)",
-                  colony.getName(), dug.toShortString());
-                return;
-            }
-        }
-    }
-
-    private static boolean shielded(final int x, final int z, final List<SiteSelector.Footprint> shields)
-    {
-        for (final SiteSelector.Footprint box : shields)
-        {
-            if (box.intersects(x, z, x, z))
-            {
-                return true;
-            }
-        }
-        return false;
     }
 
     static void ensure(
@@ -540,6 +462,11 @@ public final class FishingPond
 
         ServerFutureProcessor.queueBlueprint(new ServerFutureProcessor.BlueprintProcessingData(
           StructurePacks.getBlueprintFuture(hut.getStructurePack(), path, true, level.registryAccess()), level, blueprint -> {
+
+            if (!WorldUtil.isChunkLoaded(level, hut.getPosition().getX() >> 4, hut.getPosition().getZ() >> 4))
+            {
+                return;
+            }
             Direction side = null;
             boolean probeFailed = false;
             try
@@ -727,7 +654,7 @@ public final class FishingPond
         {
             return cached.water();
         }
-        final BlockPos found = scanTrustedWater(level, anchor);
+        final BlockPos found = scanTrustedWater(level, anchor, null);
         trustedWater.put(key, new TrustedWater(now, found));
         return found;
     }
@@ -738,20 +665,39 @@ public final class FishingPond
 
     private static final Map<GlobalPos, TrustedWater> trustedWater = new HashMap<>();
 
-    private static BlockPos scanTrustedWater(final ServerLevel level, final BlockPos anchor)
+    static final class SurveyedColumn
+    {
+        private boolean loaded;
+
+        private BlockPos surface;
+
+        private boolean source;
+    }
+
+    static BlockPos scanTrustedWater(final ServerLevel level, final BlockPos anchor, final Long2ObjectMap<SurveyedColumn> columns)
     {
         for (int x = anchor.getX() - TRUSTED_WATER_RADIUS; x <= anchor.getX() + TRUSTED_WATER_RADIUS; x += 4)
         {
             for (int z = anchor.getZ() - TRUSTED_WATER_RADIUS; z <= anchor.getZ() + TRUSTED_WATER_RADIUS; z += 4)
             {
-                if (!WorldUtil.isChunkLoaded(level, x >> 4, z >> 4))
+                SurveyedColumn seen = columns == null ? null : columns.get(BlockPos.asLong(x, 0, z));
+                if (seen == null)
                 {
-                    continue;
-                }
+                    seen = new SurveyedColumn();
+                    seen.loaded = WorldUtil.isChunkLoaded(level, x >> 4, z >> 4);
+                    if (seen.loaded)
+                    {
 
-                final BlockPos surface = new BlockPos(x, SiteSelector.groundHeight(level, x, z) - 1, z);
-                if (!level.getFluidState(surface).isSource()
-                      || Math.abs(surface.getY() - anchor.getY()) > TRUSTED_WATER_DEPTH)
+                        seen.surface = new BlockPos(x, SiteSelector.groundHeight(level, x, z) - 1, z);
+                        seen.source = level.getFluidState(seen.surface).isSource();
+                    }
+                    if (columns != null)
+                    {
+                        columns.put(BlockPos.asLong(x, 0, z), seen);
+                    }
+                }
+                final BlockPos surface = seen.surface;
+                if (!seen.loaded || !seen.source || Math.abs(surface.getY() - anchor.getY()) > TRUSTED_WATER_DEPTH)
                 {
                     continue;
                 }

@@ -1,0 +1,19 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "minetraps:barbed_wire", "required": false },
+    { "id": "minetraps:barbed_wire_fence", "required": false },
+    { "id": "minetraps:razor_wire", "required": false },
+    { "id": "minetraps:spikes", "required": false },
+    { "id": "minetraps:spikes_toxic", "required": false },
+    { "id": "minetraps:bear_trap", "required": false },
+    { "id": "minetraps:nail_trap", "required": false },
+    { "id": "minetraps:toxic_nail_trap", "required": false },
+    { "id": "minetraps:explosive_mine", "required": false },
+    { "id": "minetraps:toxic_mine", "required": false },
+    { "id": "minetraps:pitfall_trap", "required": false },
+    { "id": "minetraps:ghost_block", "required": false },
+    { "id": "minetraps:quicksand", "required": false },
+    { "id": "minetraps:toxin", "required": false }
+  ]
+}

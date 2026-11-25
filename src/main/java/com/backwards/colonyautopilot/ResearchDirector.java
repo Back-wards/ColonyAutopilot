@@ -22,9 +22,9 @@ import com.minecolonies.api.research.requirements.BuildingResearchRequirement;
 import com.minecolonies.api.research.util.ResearchConstants;
 import com.minecolonies.api.research.util.ResearchState;
 import com.minecolonies.api.util.InventoryUtils;
+import com.minecolonies.api.util.WorldUtil;
 import com.minecolonies.core.colony.buildings.workerbuildings.BuildingUniversity;
 import com.minecolonies.core.research.LocalResearch;
-import com.mojang.authlib.GameProfile;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
@@ -33,7 +33,6 @@ import net.minecraft.world.level.block.Block;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.common.crafting.SizedIngredient;
 import net.neoforged.neoforge.common.util.FakePlayer;
-import net.neoforged.neoforge.common.util.FakePlayerFactory;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.items.IItemHandler;
@@ -75,7 +74,19 @@ public class ResearchDirector
     private static String planSignature(final IColony colony)
     {
         return AutopilotConfig.live(colony, AutopilotConfig.NO_GRAVES) + "|" + AutopilotConfig.get(colony, AutopilotConfig.RESEARCH_FULL_TREE)
-                 + "|" + AutopilotConfig.RESEARCH_CAPSTONES.get() + "|" + AutopilotConfig.RESEARCH_FORKS.get();
+                 + "|" + AutopilotConfig.RESEARCH_CAPSTONES.get() + "|" + AutopilotConfig.RESEARCH_FORKS.get() + "|" + cavalryWanted(colony);
+    }
+
+    private static boolean cavalryWanted(final IColony colony)
+    {
+        for (final IBuilding building : colony.getServerBuildingManager().getBuildings().values())
+        {
+            if (building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutStable)
+            {
+                return true;
+            }
+        }
+        return Boolean.TRUE.equals(GrowthDirector.shipsStable(colony));
     }
 
     private List<WantedResearch> planFor(final IColony colony)
@@ -161,7 +172,8 @@ public class ResearchDirector
         final boolean freeBlacksmith = AutopilotConfig.live(colony, AutopilotConfig.RESEARCH_FREE_BLACKSMITH);
         final boolean freePopulation = AutopilotConfig.live(colony, AutopilotConfig.RESEARCH_FREE_POPULATION);
         final boolean freeDruid = AutopilotConfig.live(colony, AutopilotConfig.RESEARCH_FREE_DRUID);
-        final String switches = freeSpeed + "|" + freeBarracks + "|" + freeBlacksmith + "|" + freePopulation + "|" + freeDruid;
+        final String switches = freeSpeed + "|" + freeBarracks + "|" + freeBlacksmith + "|" + freePopulation + "|" + freeDruid
+                                  + "|" + AutopilotConfig.RESEARCH_CAPSTONES.get();
         if ((!freeSpeed && !freeBarracks && !freeBlacksmith && !freePopulation && !freeDruid)
               || switches.equals(freeResearchGranted.put(ColonyAutopilot.colonyKey(colony), switches)))
         {
@@ -173,6 +185,17 @@ public class ResearchDirector
           ? colony.getResearchManager().getResearchEffectIdFrom(ModBlocks.blockHutBlacksmith) : null;
         final ILocalResearchTree local = colony.getResearchManager().getResearchTree();
         final IGlobalResearchTree tree = IGlobalResearchTree.getInstance();
+
+        final Map<ResourceLocation, ResourceLocation> listedCapstone = new HashMap<>();
+        for (final String entry : AutopilotConfig.RESEARCH_CAPSTONES.get().split(","))
+        {
+            final ResourceLocation listed = ResourceLocation.tryParse(entry.trim());
+            final IGlobalResearch capstone = listed == null ? null : tree.getResearch(listed);
+            if (capstone != null && capstone.getDepth() >= ResearchConstants.MAX_DEPTH)
+            {
+                listedCapstone.putIfAbsent(capstone.getBranch(), capstone.getId());
+            }
+        }
         int granted = 0;
 
         final Set<String> grantedFor = new LinkedHashSet<>();
@@ -222,6 +245,12 @@ public class ResearchDirector
                     }
                 }
                 if (wantedFor == null)
+                {
+                    continue;
+                }
+
+                if (research.getDepth() >= ResearchConstants.MAX_DEPTH
+                      && (!id.equals(listedCapstone.get(branch)) || local.branchFinishedHighestLevel(branch)))
                 {
                     continue;
                 }
@@ -308,6 +337,7 @@ public class ResearchDirector
 
         final WorkerBuildingModule researchers = university.getModule(WorkerBuildingModule.class);
         if (researchers != null && !researchers.isFull()
+              && WorldUtil.isChunkLoaded(level, university.getPosition().getX() >> 4, university.getPosition().getZ() >> 4)
               && com.minecolonies.core.util.BuildingUtils.canAutoHire(university, researchers.getHiringMode(), researchers.getJobEntry()))
         {
             final ICitizenData jobless = colony.getCitizenManager().getJoblessCitizen();
@@ -462,8 +492,7 @@ public class ResearchDirector
       final boolean logWait,
       final boolean pick)
     {
-        final FakePlayer actor = FakePlayerFactory.get(level,
-          new GameProfile(colony.getPermissions().getOwner(), colony.getPermissions().getOwnerName()));
+        final FakePlayer actor = ColonyAutopilot.fakeOwner(level, colony);
         actor.getInventory().clearContent();
         final boolean progression = AutopilotConfig.progressionMode(colony);
         long conjured = 0;
@@ -594,8 +623,11 @@ public class ResearchDirector
         }
         else
         {
-            ColonyAutopilot.LOGGER.info("[{}] the university began researching '{}' (prerequisite on the way to a new building)",
-              colony.getName(), researchName);
+
+            ColonyAutopilot.LOGGER.info("[{}] the university began researching '{}' ({})", colony.getName(), researchName,
+              want.tier() < 0 ? "for a guard type the militia waits for"
+                : want.tier() == 0 ? "on the way to a new building or a higher population cap"
+                : want.tier() == 1 ? "guard research" : "the open tree");
         }
         if (want.unlocks() != null
               && !(AutopilotConfig.live(colony, AutopilotConfig.NO_GRAVES) && want.unlocks() == ModBlocks.blockHutGraveyard))
@@ -690,6 +722,18 @@ public class ResearchDirector
         return false;
     }
 
+    private static boolean cavalryBound(final IGlobalResearch research)
+    {
+        for (final IResearchEffect effect : research.getEffects())
+        {
+            if (ResearchConstants.MOUNT_HEALTH.equals(effect.getId()) || ResearchConstants.MOUNT_ARMOR.equals(effect.getId()))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private List<WantedResearch> computeWanted(final IColony colony)
     {
         final Set<ResourceLocation> hutEffects = new HashSet<>();
@@ -705,6 +749,8 @@ public class ResearchDirector
         }
 
         final boolean fullTree = AutopilotConfig.get(colony, AutopilotConfig.RESEARCH_FULL_TREE);
+
+        final boolean cavalry = cavalryWanted(colony);
         final Set<ResourceLocation> chosenResearch = chosenResearchIds();
         final IGlobalResearchTree tree = IGlobalResearchTree.getInstance();
 
@@ -734,6 +780,11 @@ public class ResearchDirector
                 }
                 if (AutopilotConfig.live(colony, AutopilotConfig.NO_GRAVES) && gravebound(research))
                 {
+                    continue;
+                }
+                if (!cavalry && cavalryBound(research))
+                {
+
                     continue;
                 }
                 queue.addAll(research.getChildren());
@@ -849,7 +900,9 @@ public class ResearchDirector
               ResearchConstants.FLEEING_DAMAGE, ResearchConstants.FIRE_RES, ResearchConstants.REGENERATION,
               ResearchConstants.MELEE_DAMAGE, ResearchConstants.ARCHER_DAMAGE, ResearchConstants.ARROW_PIERCE,
               ResearchConstants.DOUBLE_ARROWS, ResearchConstants.ARCHER_USE_ARROWS, ResearchConstants.GUARD_CRIT,
-              ResearchConstants.KNIGHT_WHIRLWIND, ResearchConstants.LOOTING);
+              ResearchConstants.KNIGHT_WHIRLWIND, ResearchConstants.LOOTING,
+
+              ResearchConstants.MOUNT_HEALTH, ResearchConstants.MOUNT_ARMOR);
         }
         return combatEffects;
     }

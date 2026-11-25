@@ -45,10 +45,7 @@ public class GunEnchantabilityMixin
     @Inject(method = "isEnchantable", at = @At("HEAD"), cancellable = true)
     private void colonyautopilot$gunsTakeEnchantments(final ItemStack stack, final CallbackInfoReturnable<Boolean> cir)
     {
-
-        if (colonyautopilot$isEnchantableGun()
-              && !stack.getOrDefault(net.minecraft.core.component.DataComponents.CUSTOM_DATA, net.minecraft.world.item.component.CustomData.EMPTY)
-                    .contains(AutopilotConfig.ISSUED_GUN_TAG))
+        if (colonyautopilot$isEnchantableGun())
         {
             cir.setReturnValue(true);
         }

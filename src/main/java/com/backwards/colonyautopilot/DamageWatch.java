@@ -15,10 +15,12 @@ import com.ldtteam.structurize.util.ITickedWorldOperation;
 import com.ldtteam.structurize.storage.ServerFutureProcessor;
 import com.ldtteam.structurize.storage.StructurePackMeta;
 import com.ldtteam.structurize.storage.StructurePacks;
+import com.minecolonies.api.IMinecoloniesAPI;
 import com.minecolonies.api.blocks.AbstractBlockHut;
 import com.minecolonies.api.colony.IColony;
 import com.minecolonies.api.colony.IColonyManager;
 import com.minecolonies.api.colony.buildings.IBuilding;
+import com.minecolonies.api.eventbus.events.colony.buildings.BuildingRemovedModEvent;
 import com.minecolonies.api.items.component.ColonyId;
 import com.minecolonies.api.util.CreativeBuildingStructureHandler;
 import com.minecolonies.api.util.Utils;
@@ -26,7 +28,6 @@ import com.minecolonies.api.util.WorldUtil;
 import com.minecolonies.core.colony.buildings.workerbuildings.BuildingBarracks;
 import com.minecolonies.core.colony.workorders.WorkOrderBuilding;
 import com.minecolonies.core.tileentities.TileEntityColonyBuilding;
-import com.mojang.authlib.GameProfile;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -44,8 +45,8 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.ModList;
 import net.neoforged.neoforge.common.util.FakePlayer;
-import net.neoforged.neoforge.common.util.FakePlayerFactory;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
+import net.neoforged.neoforge.event.server.ServerStoppedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
@@ -86,6 +87,8 @@ public class DamageWatch
 
     private final Map<ColonyId, Map<BlockPos, Long>> cooldownUntil = new HashMap<>();
 
+    private final Map<ColonyId, Map<BlockPos, List<Integer>>> heldSaid = new HashMap<>();
+
     private final Map<ColonyId, Boolean> wasRaided = new HashMap<>();
 
     private final Map<ColonyId, ScanJob> activeScans = new HashMap<>();
@@ -110,11 +113,11 @@ public class DamageWatch
     private static final int HEAL_CLEAR_RADIUS = 3;
 
     private record BuildingMemory(Block hutBlock, int level, Direction facing, RotationMirror rotationMirror, String pack, String blueprintPath,
-      Integer anchorOffset, Direction front, boolean takenInPlace, boolean owesRepair)
+      Integer anchorOffset, Direction front, boolean takenInPlace, boolean owesRepair, BlockPos parent)
     {
         BuildingMemory taken()
         {
-            return new BuildingMemory(hutBlock, level, facing, rotationMirror, pack, blueprintPath, anchorOffset, front, true, owesRepair);
+            return new BuildingMemory(hutBlock, level, facing, rotationMirror, pack, blueprintPath, anchorOffset, front, true, owesRepair, parent);
         }
 
         ColonyGrounds.SentinelMemory saved()
@@ -123,7 +126,7 @@ public class DamageWatch
               rotationMirror.name(), pack, blueprintPath, anchorOffset, front == null ? null : front.get2DDataValue(), takenInPlace);
         }
 
-        static BuildingMemory of(final ColonyGrounds.SentinelMemory saved, final boolean owesRepair)
+        static BuildingMemory of(final ColonyGrounds.SentinelMemory saved, final boolean owesRepair, final BlockPos parent)
         {
             final ResourceLocation id = ResourceLocation.tryParse(saved.hutBlock());
             final Block hut = id == null ? null : BuiltInRegistries.BLOCK.getOptional(id).orElse(null);
@@ -144,7 +147,7 @@ public class DamageWatch
                 }
             }
             return new BuildingMemory(hut, saved.level(), Direction.from2DDataValue(saved.facing()), rotation, saved.pack(), saved.blueprintPath(),
-              saved.anchorOffset(), saved.front() == null ? null : Direction.from2DDataValue(saved.front()), saved.takenInPlace(), owesRepair);
+              saved.anchorOffset(), saved.front() == null ? null : Direction.from2DDataValue(saved.front()), saved.takenInPlace(), owesRepair, parent);
         }
     }
 
@@ -155,8 +158,10 @@ public class DamageWatch
         final IColony colony;
         final BlockPos buildingId;
         final Blueprint blueprint;
+
+        final short[][][] structure;
+        final BlockState[] palette;
         final BlockPos zero;
-        final BlockState anchorWant;
         final RotationMirror rotationMirror;
         int y;
         int x;
@@ -164,20 +169,26 @@ public class DamageWatch
 
         int chargedLayer = -1;
         int missing;
+
+        boolean curing;
         int cured;
 
         int infested;
+
+        int matching;
+        int differing;
         final List<String> samples = new ArrayList<>();
 
         final List<BlockPos> familyCells = new ArrayList<>();
 
-        ScanJob(final IColony colony, final BlockPos buildingId, final Blueprint blueprint, final BlockPos zero, final BlockState anchorWant, final RotationMirror rotationMirror)
+        ScanJob(final IColony colony, final BlockPos buildingId, final Blueprint blueprint, final BlockPos zero, final RotationMirror rotationMirror)
         {
             this.colony = colony;
             this.buildingId = buildingId;
             this.blueprint = blueprint;
+            this.structure = blueprint.getStructure();
+            this.palette = blueprint.getPalette();
             this.zero = zero;
-            this.anchorWant = anchorWant;
             this.rotationMirror = rotationMirror;
         }
     }
@@ -185,6 +196,11 @@ public class DamageWatch
     DamageWatch(final UpgradeDirector director)
     {
         this.director = director;
+    }
+
+    public void subscribeToMineColonies()
+    {
+        IMinecoloniesAPI.getInstance().getEventBus().subscribe(BuildingRemovedModEvent.class, this::onBuildingRemoved);
     }
 
     @SubscribeEvent
@@ -196,6 +212,7 @@ public class DamageWatch
         repasting.clear();
         cooldownUntil.clear();
         activeScans.clear();
+        heldSaid.clear();
         wasRaided.clear();
         ledger.clear();
         healing.clear();
@@ -210,24 +227,48 @@ public class DamageWatch
         repasting.clear();
         cooldownUntil.clear();
         activeScans.clear();
+        heldSaid.clear();
         wasRaided.clear();
         ledger.clear();
         healing.clear();
+
+        clearStructurize(true);
+    }
+
+    @SubscribeEvent
+    public void onServerStopped(final ServerStoppedEvent event)
+    {
+        clearStructurize(false);
+    }
+
+    private static void clearStructurize(final boolean layPaidGoods)
+    {
 
         clearStructurizeFutureQueue("blueprintConsumerQueue");
         clearStructurizeFutureQueue("blueprintDataConsumerQueue");
         clearStructurizeFutureQueue("blueprintListConsumerQueue");
 
-        clearStructurizePastes();
+        clearStructurizePastes(layPaidGoods);
     }
 
-    private static void clearStructurizePastes()
+    private static void clearStructurizePastes(final boolean layPaidGoods)
     {
         try
         {
             final Field field = Manager.class.getDeclaredField("scanToolOperationPool");
             field.setAccessible(true);
-            ((Collection<?>) field.get(null)).removeIf(operation -> operation instanceof PacedCreativePaste);
+            final Collection<?> pool = (Collection<?>) field.get(null);
+            if (layPaidGoods)
+            {
+                for (final Object operation : pool)
+                {
+                    if (operation instanceof PacedCreativePaste paste)
+                    {
+                        paste.layPaidGoods();
+                    }
+                }
+            }
+            pool.removeIf(operation -> operation instanceof PacedCreativePaste);
         }
         catch (final Throwable t)
         {
@@ -286,7 +327,7 @@ public class DamageWatch
                 ColonyAutopilot.LOGGER.warn("Damage scan failed for colony {}", colony.getName(), e);
             }
         }
-        ColonyAutopilot.retainColonies(live, cursor, scanPending, repasting, cooldownUntil, activeScans, wasRaided, ledger, healing);
+        ColonyAutopilot.retainColonies(live, cursor, scanPending, repasting, cooldownUntil, activeScans, heldSaid, wasRaided, ledger, healing);
     }
 
     private void raidEdge(final IColony colony)
@@ -395,8 +436,24 @@ public class DamageWatch
               building.getColony().getName(), SiteSelector.plainName(building), building.getID().toShortString(), grace - now);
             return false;
         }
+
         final Tuple<BlockPos, BlockPos> corners = building.getCorners();
-        return level.isLoaded(corners.getA()) && level.isLoaded(corners.getB());
+        return chunksLoaded(level, corners.getA().getX(), corners.getA().getZ(), corners.getB().getX(), corners.getB().getZ());
+    }
+
+    static boolean chunksLoaded(final ServerLevel level, final int minX, final int minZ, final int maxX, final int maxZ)
+    {
+        for (int cx = minX >> 4; cx <= maxX >> 4; cx++)
+        {
+            for (int cz = minZ >> 4; cz <= maxZ >> 4; cz++)
+            {
+                if (!WorldUtil.isChunkLoaded(level, cx, cz))
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private boolean parentRaised(final IBuilding building, final List<WorkOrderBuilding> openOrders, final long now)
@@ -421,17 +478,18 @@ public class DamageWatch
         ServerFutureProcessor.queueBlueprint(new ServerFutureProcessor.BlueprintProcessingData(
           StructurePacks.getBlueprintFuture(pack, path, true, level.registryAccess()), level, blueprint -> {
             scanPending.remove(key);
-            if (blueprint == null)
-            {
 
-                cooldownUntil.computeIfAbsent(key, k -> new HashMap<>())
-                  .put(buildingId, level.getGameTime() + AutopilotConfig.get(colony, AutopilotConfig.DAMAGE_RESCAN_COOLDOWN_TICKS));
-                ColonyAutopilot.LOGGER.debug("[{}] the damage scan found no blueprint '{}' in the pack '{}' for the building at {} — it waits out a rescan cooldown",
-                  colony.getName(), path, pack, buildingId.toShortString());
-                return;
-            }
             try
             {
+                if (blueprint == null)
+                {
+
+                    cooldownUntil.computeIfAbsent(key, k -> new HashMap<>())
+                      .put(buildingId, level.getGameTime() + AutopilotConfig.get(colony, AutopilotConfig.DAMAGE_RESCAN_COOLDOWN_TICKS));
+                    ColonyAutopilot.LOGGER.debug("[{}] the damage scan found no blueprint '{}' in the pack '{}' for the building at {} — it waits out a rescan cooldown",
+                      colony.getName(), path, pack, buildingId.toShortString());
+                    return;
+                }
                 finishScan(colony, key, level, buildingId, blueprint);
             }
             catch (final Exception e)
@@ -454,8 +512,14 @@ public class DamageWatch
             return;
         }
 
+        if (!WorldUtil.isChunkLoaded(level, building.getPosition().getX() >> 4, building.getPosition().getZ() >> 4))
+        {
+            return;
+        }
+
         blueprint.setRotationMirror(RotationMirror.NONE, level);
-        final BlockState anchorState = blueprint.getBlockState(blueprint.getPrimaryBlockOffset());
+        final BlockPos anchor = blueprint.getPrimaryBlockOffset();
+        final BlockState anchorState = blueprint.getPalette()[blueprint.getStructure()[anchor.getY()][anchor.getZ()][anchor.getX()] & 0xFFFF];
         final BlockState worldHut = level.getBlockState(building.getPosition());
         final RotationMirror rotationMirror;
         if (anchorState != null && anchorState.hasProperty(AbstractBlockHut.FACING) && worldHut.hasProperty(AbstractBlockHut.FACING))
@@ -472,8 +536,7 @@ public class DamageWatch
         blueprint.setRotationMirror(rotationMirror, level);
         final BlockPos zero = building.getPosition().subtract(blueprint.getPrimaryBlockOffset());
 
-        activeScans.put(key, new ScanJob(colony, buildingId, blueprint,
-          zero, blueprint.getBlockState(blueprint.getPrimaryBlockOffset()), rotationMirror));
+        activeScans.put(key, new ScanJob(colony, buildingId, blueprint, zero, rotationMirror));
     }
 
     private void drainScans()
@@ -483,114 +546,144 @@ public class DamageWatch
         {
             final Map.Entry<ColonyId, ScanJob> entry = iterator.next();
             final ScanJob job = entry.getValue();
-            if (!(job.colony.getWorld() instanceof ServerLevel level)
-                  || job.blueprint.getBlockState(job.blueprint.getPrimaryBlockOffset()) != job.anchorWant)
-            {
-                iterator.remove();
-                continue;
-            }
-            final boolean cureSpore = AutopilotConfig.live(job.colony, AutopilotConfig.SPORES_CREEP_GUARD);
-            final boolean metered = AutopilotConfig.progressionMode(job.colony);
 
-            boolean loaded = true;
-            for (int cx = job.zero.getX() >> 4; loaded && cx <= (job.zero.getX() + job.blueprint.getSizeX() - 1) >> 4; cx++)
-            {
-                for (int cz = job.zero.getZ() >> 4; loaded && cz <= (job.zero.getZ() + job.blueprint.getSizeZ() - 1) >> 4; cz++)
-                {
-                    loaded = WorldUtil.isChunkLoaded(level, cx, cz);
-                }
-            }
-            if (!loaded)
-            {
-                iterator.remove();
-                continue;
-            }
-            final BlockPos.MutableBlockPos localPos = new BlockPos.MutableBlockPos();
-            final BlockPos.MutableBlockPos worldPos = new BlockPos.MutableBlockPos();
-            final int lastLayer = Math.min(job.blueprint.getSizeY(), job.y + LAYERS_PER_TICK);
-            int cures = 0;
-            walk:
-            for (; job.y < lastLayer && TickBudget.has(); job.y++)
+            try
             {
 
-                if (job.chargedLayer != job.y)
+                if (!(job.colony.getWorld() instanceof ServerLevel level) || job.blueprint.getStructure() != job.structure)
                 {
-                    TickBudget.spend(job.blueprint.getSizeX() * job.blueprint.getSizeZ());
-                    job.chargedLayer = job.y;
+                    iterator.remove();
+                    continue;
                 }
-                for (; job.x < job.blueprint.getSizeX(); job.x++)
+                final boolean cureSpore = AutopilotConfig.live(job.colony, AutopilotConfig.SPORES_CREEP_GUARD);
+                final boolean metered = AutopilotConfig.progressionMode(job.colony);
+
+                if (!chunksLoaded(level, job.zero.getX(), job.zero.getZ(),
+                  job.zero.getX() + job.blueprint.getSizeX() - 1, job.zero.getZ() + job.blueprint.getSizeZ() - 1))
                 {
-                    for (; job.z < job.blueprint.getSizeZ(); job.z++)
+                    iterator.remove();
+                    continue;
+                }
+                final BlockPos.MutableBlockPos worldPos = new BlockPos.MutableBlockPos();
+                final int lastLayer = Math.min(job.blueprint.getSizeY(), job.y + LAYERS_PER_TICK);
+                int cures = 0;
+                walk:
+                for (; job.y < lastLayer && TickBudget.has(); job.y++)
+                {
+
+                    if (job.chargedLayer != job.y)
                     {
-                        final BlockState want = job.blueprint.getBlockState(localPos.set(job.x, job.y, job.z));
-                        if (!structuralExpectation(want))
+                        TickBudget.spend(job.blueprint.getSizeX() * job.blueprint.getSizeZ());
+                        job.chargedLayer = job.y;
+                    }
+                    for (; job.x < job.blueprint.getSizeX(); job.x++)
+                    {
+                        for (; job.z < job.blueprint.getSizeZ(); job.z++)
                         {
+                            final BlockState want = job.palette[job.structure[job.y][job.z][job.x] & 0xFFFF];
+                            if (!structuralExpectation(want))
+                            {
 
-                            if (metered && want != null && Exchange.familyValue(want.getBlock().asItem()) > 0
-                                  && pasteReplaces(level.getBlockState(worldPos.set(job.zero.getX() + job.x, job.zero.getY() + job.y, job.zero.getZ() + job.z)), want))
+                                if (metered && want != null && Exchange.familyValue(want.getBlock().asItem()) > 0
+                                      && pasteReplaces(level.getBlockState(worldPos.set(job.zero.getX() + job.x, job.zero.getY() + job.y, job.zero.getZ() + job.z)), want))
+                                {
+                                    job.familyCells.add(new BlockPos(job.x, job.y, job.z));
+                                }
+                                continue;
+                            }
+                            BlockState got = level.getBlockState(worldPos.set(job.zero.getX() + job.x, job.zero.getY() + job.y, job.zero.getZ() + job.z));
+
+                            if (!got.is(want.getBlock()) && SporeCompat.isInfection(got.getBlock()) && !GroundsWarden.naturalMycelium(level, worldPos, got))
+                            {
+                                if (cureSpore && job.curing)
+                                {
+                                    if (cures >= CURE_WRITES_PER_TICK || !TickBudget.has())
+                                    {
+                                        break walk;
+                                    }
+
+                                    final boolean paidFor = metered && Exchange.familyValue(want.getBlock().asItem()) > 0;
+                                    WorldUtil.setBlockState(level, worldPos.immutable(), paidFor ? Blocks.AIR.defaultBlockState() : want);
+                                    TickBudget.spend(1);
+                                    job.cured++;
+                                    cures++;
+                                    if (!paidFor)
+                                    {
+                                        continue;
+                                    }
+                                    got = Blocks.AIR.defaultBlockState();
+                                }
+                                else
+                                {
+                                    job.infested++;
+                                }
+                            }
+
+                            if (metered && pasteReplaces(got, want) && Exchange.familyValue(want.getBlock().asItem()) > 0)
                             {
                                 job.familyCells.add(new BlockPos(job.x, job.y, job.z));
                             }
-                            continue;
-                        }
-                        BlockState got = level.getBlockState(worldPos.set(job.zero.getX() + job.x, job.zero.getY() + job.y, job.zero.getZ() + job.z));
-
-                        if (!got.is(want.getBlock()) && SporeCompat.isInfection(got.getBlock()))
-                        {
-                            if (cureSpore)
+                            final int standing = standing(got, want);
+                            if (standing > 0)
                             {
-                                if (cures >= CURE_WRITES_PER_TICK || !TickBudget.has())
+                                job.matching++;
+                            }
+                            else if (standing < 0)
+                            {
+                                job.differing++;
+                            }
+                            if (readsMissing(got, want))
+                            {
+                                job.missing++;
+                                if (job.samples.size() < 6)
                                 {
-                                    break walk;
+                                    job.samples.add("expected " + BuiltInRegistries.BLOCK.getKey(want.getBlock())
+                                                      + " at " + worldPos.toShortString()
+                                                      + ", found " + BuiltInRegistries.BLOCK.getKey(got.getBlock()));
                                 }
-
-                                final boolean paidFor = metered && Exchange.familyValue(want.getBlock().asItem()) > 0;
-                                WorldUtil.setBlockState(level, worldPos.immutable(), paidFor ? Blocks.AIR.defaultBlockState() : want);
-                                TickBudget.spend(1);
-                                job.cured++;
-                                cures++;
-                                if (!paidFor)
-                                {
-                                    continue;
-                                }
-                                got = Blocks.AIR.defaultBlockState();
-                            }
-                            else
-                            {
-                                job.infested++;
                             }
                         }
-
-                        if (metered && pasteReplaces(got, want) && Exchange.familyValue(want.getBlock().asItem()) > 0)
-                        {
-                            job.familyCells.add(new BlockPos(job.x, job.y, job.z));
-                        }
-                        if (readsMissing(got, want))
-                        {
-                            job.missing++;
-                            if (job.samples.size() < 6)
-                            {
-                                job.samples.add("expected " + BuiltInRegistries.BLOCK.getKey(want.getBlock())
-                                                  + " at " + worldPos.toShortString()
-                                                  + ", found " + BuiltInRegistries.BLOCK.getKey(got.getBlock()));
-                            }
-                        }
+                        job.z = 0;
                     }
-                    job.z = 0;
+                    job.x = 0;
                 }
-                job.x = 0;
+                if (job.y >= job.blueprint.getSizeY())
+                {
+
+                    if (cureSpore && !job.curing && job.infested > 0 && job.differing <= job.matching)
+                    {
+                        job.curing = true;
+                        job.y = 0;
+                        job.chargedLayer = -1;
+                        job.missing = 0;
+                        job.infested = 0;
+                        job.matching = 0;
+                        job.differing = 0;
+                        job.samples.clear();
+                        job.familyCells.clear();
+                        continue;
+                    }
+                    iterator.remove();
+                    try
+                    {
+                        verdict(entry.getKey(), level, job);
+                    }
+                    catch (final Exception e)
+                    {
+                        ColonyAutopilot.LOGGER.warn("[{}] damage verdict for {} failed", job.colony.getName(), job.buildingId, e);
+                    }
+                }
             }
-            if (job.y >= job.blueprint.getSizeY())
+            catch (final Exception e)
             {
+
                 iterator.remove();
-                try
+                if (job.colony.getWorld() != null)
                 {
-                    verdict(entry.getKey(), level, job);
+                    cooldownUntil.computeIfAbsent(entry.getKey(), k -> new HashMap<>())
+                      .put(job.buildingId, job.colony.getWorld().getGameTime() + FAILED_PASTE_COOLDOWN_TICKS);
                 }
-                catch (final Exception e)
-                {
-                    ColonyAutopilot.LOGGER.warn("[{}] damage verdict for {} failed", job.colony.getName(), job.buildingId, e);
-                }
+                ColonyAutopilot.LOGGER.warn("[{}] the damage scan of the building at {} failed and was dropped", job.colony.getName(), job.buildingId.toShortString(), e);
             }
         }
     }
@@ -612,6 +705,19 @@ public class DamageWatch
         return !got.is(want.getBlock()) && (readsMissing(got, want) || SporeCompat.isInfection(got.getBlock()));
     }
 
+    static int standing(final BlockState got, final BlockState want)
+    {
+        if (VillageGrounds.isEarth(want.getBlock()) && VillageGrounds.isEarth(got.getBlock()))
+        {
+            return 0;
+        }
+        if (got.is(want.getBlock()))
+        {
+            return 1;
+        }
+        return !got.canBeReplaced() && !pasteReplaces(got, want) ? -1 : 0;
+    }
+
     static boolean keepsWorld(final Level world, final BlockPos worldPos, final BlockState want)
     {
         if (want == null || "structurize".equals(BuiltInRegistries.BLOCK.getKey(want.getBlock()).getNamespace()))
@@ -619,7 +725,7 @@ public class DamageWatch
             return false;
         }
         final BlockState got = world.getBlockState(worldPos);
-        return !got.is(want.getBlock()) && !pasteReplaces(got, want);
+        return got.is(want.getBlock()) ? got != want && got.hasBlockEntity() : !pasteReplaces(got, want);
     }
 
     private void verdict(final ColonyId key, final ServerLevel level, final ScanJob job)
@@ -632,7 +738,14 @@ public class DamageWatch
         if (job.cured > 0)
         {
             ColonyAutopilot.LOGGER.debug("[{}] the creep guard restored {} infested blocks in the {} from its blueprint",
-              job.colony.getName(), job.cured, building.getBuildingDisplayName());
+              job.colony.getName(), job.cured, SiteSelector.plainName(building));
+            Milestones.alert(job.colony, Milestones.ALERT_INFECTED, "Your village is infected!");
+        }
+        else if (job.infested > 0 && !job.curing && AutopilotConfig.live(job.colony, AutopilotConfig.SPORES_CREEP_GUARD))
+        {
+
+            ColonyAutopilot.LOGGER.debug("[{}] the creep guard found {} infested blocks in the {} at {} and left them: what stands is not the building its blueprint describes ({} of its blocks match the blueprint, {} are other blocks), and nothing of the blueprint is laid in it",
+              job.colony.getName(), job.infested, SiteSelector.plainName(building), job.buildingId.toShortString(), job.matching, job.differing);
             Milestones.alert(job.colony, Milestones.ALERT_INFECTED, "Your village is infected!");
         }
         final long now = level.getGameTime();
@@ -642,6 +755,8 @@ public class DamageWatch
         {
             return;
         }
+        ColonyAutopilot.LOGGER.debug("[{}] the {} at {} misses {} block(s): {} match the blueprint, {} are other blocks",
+          job.colony.getName(), SiteSelector.plainName(building), job.buildingId.toShortString(), job.missing, job.matching, job.differing);
 
         final List<WorkOrderBuilding> orders = job.colony.getWorkManager().getWorkOrdersOfType(WorkOrderBuilding.class);
         if (UpgradeDirector.hasOpenOrder(building, orders) || director.repairPending(job.colony, job.buildingId)
@@ -657,11 +772,24 @@ public class DamageWatch
             return;
         }
 
+        if (job.differing > job.matching)
+        {
+            colonyCooldowns.put(job.buildingId, now + FAILED_PASTE_COOLDOWN_TICKS);
+
+            final List<Integer> tally = List.of(job.matching, job.differing, job.missing);
+            if (!tally.equals(heldSaid.computeIfAbsent(key, k -> new HashMap<>()).put(job.buildingId, tally)))
+            {
+                ColonyAutopilot.LOGGER.info("[{}] the {} at {} is not the building its blueprint describes ({} of its blocks match the blueprint, {} are other blocks, {} missing) — it is left as it stands, no re-paste",
+                  job.colony.getName(), SiteSelector.plainName(building), job.buildingId.toShortString(), job.matching, job.differing, job.missing);
+            }
+            return;
+        }
+
         final int infection = job.cured + job.infested;
         if (infection > 0 && !job.familyCells.isEmpty())
         {
             ColonyAutopilot.LOGGER.debug("[{}] the repair of the {}: spore infection found ({} cell(s)), and its {} cell(s) of the exchange's goods are paid for all the same",
-              job.colony.getName(), building.getBuildingDisplayName(), infection, job.familyCells.size());
+              job.colony.getName(), SiteSelector.plainName(building), infection, job.familyCells.size());
         }
 
         final Set<BlockPos> paidGoods = AutopilotConfig.progressionMode(job.colony) ? new HashSet<>() : null;
@@ -670,7 +798,7 @@ public class DamageWatch
         int unpaidMissing = 0;
         for (final BlockPos local : job.familyCells)
         {
-            final BlockState want = job.blueprint.getBlockState(local);
+            final BlockState want = job.palette[job.structure[local.getY()][local.getZ()][local.getX()] & 0xFFFF];
             final BlockState got = level.getBlockState(job.zero.offset(local));
             if (want == null || !pasteReplaces(got, want))
             {
@@ -697,7 +825,7 @@ public class DamageWatch
         if (unpaid > 0)
         {
             ColonyAutopilot.LOGGER.debug("[{}] the repair of the {} leaves {} block(s) of the exchange's goods out: the treasury cannot pay for them",
-              job.colony.getName(), building.getBuildingDisplayName(), unpaid);
+              job.colony.getName(), SiteSelector.plainName(building), unpaid);
 
             if (paid == 0 && job.missing - unpaidMissing < AutopilotConfig.get(job.colony, AutopilotConfig.DAMAGE_THRESHOLD_BLOCKS))
             {
@@ -718,11 +846,11 @@ public class DamageWatch
 
             repasting.computeIfAbsent(key, k -> new HashMap<>()).put(job.buildingId, Long.MAX_VALUE);
 
-            Manager.addToQueue(new PacedCreativePaste(new StructurePlacer(handler), true, paidGoods,
+            Manager.addToQueue(new PacedCreativePaste(new StructurePlacer(handler), building, true, paidGoods,
               done -> repasting.computeIfAbsent(key, k -> new HashMap<>()).put(job.buildingId, done.getGameTime() + REPASTE_WINDOW_TICKS),
               failed -> cooldownUntil.computeIfAbsent(key, k -> new HashMap<>()).put(job.buildingId, failed.getGameTime() + FAILED_PASTE_COOLDOWN_TICKS)));
-            ColonyAutopilot.LOGGER.info("[{}] the creep guard is re-pasting the {} from its blueprint — {} block(s) of structure were missing (no builder); e.g. {}",
-              job.colony.getName(), building.getBuildingDisplayName(), job.missing, String.join("; ", job.samples));
+            ColonyAutopilot.LOGGER.info("[{}] re-pasting the {} from its blueprint (repair.autoRepairDamage) — {} block(s) of structure were missing (no builder); e.g. {}",
+              job.colony.getName(), SiteSelector.plainName(building), job.missing, String.join("; ", job.samples));
         }
     }
 
@@ -763,9 +891,10 @@ public class DamageWatch
                 }
                 else
                 {
-                    if (building.isDeconstructed() || building.getBuildingLevel() != task.level())
+
+                    if (building.getBuildingLevel() < task.level() || (building.isDeconstructed() && !UpgradeDirector.tornDown(building)))
                     {
-                        building.setBuildingLevel(task.level());
+                        building.setBuildingLevel(Math.max(task.level(), building.getBuildingLevel()));
                     }
                     continue;
                 }
@@ -788,7 +917,7 @@ public class DamageWatch
                   state.getValue(AbstractBlockHut.FACING), building.getRotationMirror() == null ? RotationMirror.NONE : building.getRotationMirror(),
                   building.getStructurePack(), building.getBlueprintPath(),
                   grounds.hasAnchorOffset(colony.getID(), pos) ? grounds.anchorOffset(colony.getID(), pos, 1) : null,
-                  grounds.front(colony.getID(), pos, null), false, director.repairPending(colony, pos));
+                  grounds.front(colony.getID(), pos, null), false, director.repairPending(colony, pos), parentOf(building));
 
                 if (!memory.equals(mem.put(pos, memory)))
                 {
@@ -814,7 +943,8 @@ public class DamageWatch
         for (final Map.Entry<BlockPos, BuildingMemory> entry : List.copyOf(mem.entrySet()))
         {
             final BlockPos pos = entry.getKey();
-            if (registered.contains(pos) || !WorldUtil.isChunkLoaded(level, pos.getX() >> 4, pos.getZ() >> 4))
+            if (registered.contains(pos) || !chunksLoaded(level, pos.getX() - HEAL_CLEAR_RADIUS, pos.getZ() - HEAL_CLEAR_RADIUS,
+              pos.getX() + HEAL_CLEAR_RADIUS, pos.getZ() + HEAL_CLEAR_RADIUS))
             {
                 continue;
             }
@@ -831,10 +961,18 @@ public class DamageWatch
                 forget(colony, level, pos);
                 continue;
             }
-            tasks.put(pos, new HealTask(entry.getValue().level(), now + HEAL_WINDOW_TICKS));
+
+            BuildingMemory snap = entry.getValue();
+            if (!snap.takenInPlace())
+            {
+                snap = snap.taken();
+                mem.put(pos, snap);
+                grounds.setSentinelMemory(colony.getID(), pos, snap.saved());
+            }
+            tasks.put(pos, new HealTask(snap.level(), now + HEAL_WINDOW_TICKS));
             try
             {
-                healDeregistered(colony, level, pos, entry.getValue());
+                healDeregistered(colony, level, pos, snap);
             }
             catch (final Exception e)
             {
@@ -849,7 +987,8 @@ public class DamageWatch
         for (final Map.Entry<Long, ColonyGrounds.SentinelMemory> saved : grounds.sentinelMemory(colony.getID()).entrySet())
         {
             final BlockPos pos = BlockPos.of(saved.getKey());
-            final BuildingMemory memory = BuildingMemory.of(saved.getValue(), director.repairPending(colony, pos));
+            final BuildingMemory memory = BuildingMemory.of(saved.getValue(), director.repairPending(colony, pos),
+              parentOf(colony.getServerBuildingManager().getBuilding(pos)));
             if (memory == null)
             {
                 grounds.removeSentinelMemory(colony.getID(), pos);
@@ -862,6 +1001,45 @@ public class DamageWatch
             ColonyAutopilot.LOGGER.debug("[{}] the hut-block sentinel remembers {} building(s) from the save", colony.getName(), mem.size());
         }
         return mem;
+    }
+
+    private static BlockPos parentOf(final IBuilding building)
+    {
+        if (building == null || !building.hasParent())
+        {
+            return null;
+        }
+        final BlockPos parent = building.getParent();
+        return BlockPos.ZERO.equals(parent) ? null : parent;
+    }
+
+    private void onBuildingRemoved(final BuildingRemovedModEvent event)
+    {
+        final IBuilding building = event.getBuilding();
+        final IColony colony = building.getColony();
+        final BlockPos pos = building.getPosition();
+        if (colony == null || !(colony.getWorld() instanceof ServerLevel level) || !WorldUtil.isChunkLoaded(level, pos.getX() >> 4, pos.getZ() >> 4)
+              || !building.isMatchingBlock(level.getBlockState(pos).getBlock()))
+        {
+            return;
+        }
+
+        final boolean remembered = ColonyGrounds.get(level).sentinelMemory(colony.getID()).containsKey(pos.asLong());
+        forget(colony, level, pos);
+
+        if (building instanceof BuildingBarracks barracks)
+        {
+            for (final BlockPos tower : barracks.getTowers())
+            {
+                forget(colony, level, tower);
+            }
+        }
+
+        if (remembered)
+        {
+            ColonyAutopilot.LOGGER.debug("[{}] the hut-block sentinel forgets the {} at {}: it left the registry with its hut block standing, a removal on purpose",
+              colony.getName(), SiteSelector.plainName(building), pos.toShortString());
+        }
     }
 
     private void forget(final IColony colony, final ServerLevel level, final BlockPos pos)
@@ -902,19 +1080,23 @@ public class DamageWatch
         final String path = pathForLevel(snap.blueprintPath(), snap.level());
         ServerFutureProcessor.queueBlueprint(new ServerFutureProcessor.BlueprintProcessingData(
           StructurePacks.getBlueprintFuture(snap.pack(), path, true, level.registryAccess()), level, loaded -> {
-            if (loaded == null)
-            {
-                ColonyAutopilot.LOGGER.warn("[{}] the hut-block sentinel found no blueprint '{}' in the pack '{}' to rebuild the hut at {} — it forgets the hut",
-                  colony.getName(), path, snap.pack(), pos.toShortString());
-                forget(colony, level, pos);
-                return;
-            }
-            if (colony.getServerBuildingManager().getBuilding(pos) != null)
-            {
-                return;
-            }
+
             try
             {
+                if (loaded == null)
+                {
+                    ColonyAutopilot.LOGGER.warn("[{}] the hut-block sentinel found no blueprint '{}' in the pack '{}' to rebuild the hut at {} — it forgets the hut",
+                      colony.getName(), path, snap.pack(), pos.toShortString());
+                    forget(colony, level, pos);
+                    return;
+                }
+
+                if (colony.getServerBuildingManager().getBuilding(pos) != null
+                      || !chunksLoaded(level, pos.getX() - HEAL_CLEAR_RADIUS, pos.getZ() - HEAL_CLEAR_RADIUS,
+                        pos.getX() + HEAL_CLEAR_RADIUS, pos.getZ() + HEAL_CLEAR_RADIUS))
+                {
+                    return;
+                }
                 rebuild(colony, level, pos, snap, packMeta, path, loaded);
             }
             catch (final Exception e)
@@ -928,10 +1110,46 @@ public class DamageWatch
       final StructurePackMeta packMeta, final String path, final Blueprint loaded)
     {
         final RotationMirror rotMir = rotationFor(loaded, snap, level);
+        loaded.setRotationMirror(rotMir, level);
+        final BlockPos zero = pos.subtract(loaded.getPrimaryBlockOffset());
+
+        if (!chunksLoaded(level, zero.getX(), zero.getZ(), zero.getX() + loaded.getSizeX() - 1, zero.getZ() + loaded.getSizeZ() - 1))
+        {
+            return;
+        }
+
+        int matching = 0;
+        int differing = 0;
+        final short[][][] structure = loaded.getStructure();
+        final BlockState[] palette = loaded.getPalette();
+        final BlockPos.MutableBlockPos cell = new BlockPos.MutableBlockPos();
+        for (int y = 0; y < loaded.getSizeY(); y++)
+        {
+            for (int z = 0; z < loaded.getSizeZ(); z++)
+            {
+                for (int x = 0; x < loaded.getSizeX(); x++)
+                {
+                    final BlockState want = palette[structure[y][z][x] & 0xFFFF];
+                    if (structuralExpectation(want))
+                    {
+                        final int standing = standing(level.getBlockState(cell.set(zero.getX() + x, zero.getY() + y, zero.getZ() + z)), want);
+                        if (standing > 0)
+                        {
+                            matching++;
+                        }
+                        else if (standing < 0)
+                        {
+                            differing++;
+                        }
+                    }
+                }
+            }
+        }
+        TickBudget.spend(loaded.getSizeX() * loaded.getSizeY() * loaded.getSizeZ());
 
         if (!level.getBlockState(pos).is(snap.hutBlock()))
         {
-            clearCreepAround(level, pos);
+            clearCreepAround(colony, level, pos);
             level.setBlockAndUpdate(pos, snap.hutBlock().defaultBlockState().setValue(AbstractBlockHut.FACING, snap.facing()));
         }
         if (!(level.getBlockEntity(pos) instanceof TileEntityColonyBuilding hut))
@@ -944,8 +1162,7 @@ public class DamageWatch
         hut.setBlueprintPath(path);
 
         final BlockState hutState = level.getBlockState(pos);
-        final FakePlayer owner = FakePlayerFactory.get(level,
-          new GameProfile(colony.getPermissions().getOwner(), colony.getPermissions().getOwnerName()));
+        final FakePlayer owner = ColonyAutopilot.fakeOwner(level, colony);
         hutState.getBlock().setPlacedBy(level, pos, hutState, owner, new ItemStack(snap.hutBlock()));
         IBuilding building = colony.getServerBuildingManager().getBuilding(pos);
         if (building == null)
@@ -968,6 +1185,12 @@ public class DamageWatch
             {
                 barracks.registerBlockPosition(level.getBlockState(pos), pos, level);
             }
+        }
+
+        final IBuilding parent = snap.parent() == null ? null : colony.getServerBuildingManager().getBuilding(snap.parent());
+        if (parent != null && parent != building && !building.hasParent())
+        {
+            parent.registerBlockPosition(level.getBlockState(pos), pos, level);
         }
 
         ColonyGrounds.get(level).forgetBuilding(colony.getID(), pos);
@@ -997,8 +1220,17 @@ public class DamageWatch
 
         loaded.setRotationMirror(rotMir, level);
         registerStandingChildren(level, building, loaded, pos.subtract(loaded.getPrimaryBlockOffset()));
+
+        if (differing > matching)
+        {
+            writeHutSchematicData(level, pos, hut, loaded, packMeta);
+            director.queueOutfit(building);
+            ColonyAutopilot.LOGGER.info("[{}] the hut-block sentinel set the hut block of the {} at {} again where the creep had erased it — re-registered at level {}, and nothing is raised: what stands is not the building its blueprint describes ({} of its blocks match the blueprint, {} are other blocks), it is left as it stands",
+              colony.getName(), SiteSelector.plainName(building), pos.toShortString(), snap.level(), matching, differing);
+            return;
+        }
         final Set<BlockPos> paidGoods = AutopilotConfig.progressionMode(colony)
-          ? payForGoods(colony, level, loaded, pos.subtract(loaded.getPrimaryBlockOffset()), building.getBuildingDisplayName()) : null;
+          ? payForGoods(colony, level, loaded, pos.subtract(loaded.getPrimaryBlockOffset()), SiteSelector.plainName(building)) : null;
         if (AutopilotConfig.progressionMode(colony))
         {
             stripContents(loaded);
@@ -1013,8 +1245,15 @@ public class DamageWatch
             final ColonyId key = ColonyAutopilot.colonyKey(colony);
             healing.computeIfAbsent(key, k -> new HashMap<>()).put(pos, new HealTask(snap.level(), Long.MAX_VALUE));
 
-            Manager.addToQueue(new PacedCreativePaste(new StructurePlacer(handler), false, paidGoods, done -> {
-                healing.computeIfAbsent(key, k -> new HashMap<>()).put(pos, new HealTask(snap.level(), done.getGameTime() + HEAL_WINDOW_TICKS));
+            Manager.addToQueue(new PacedCreativePaste(new StructurePlacer(handler), rebuilt, false, paidGoods, done -> {
+                final Map<BlockPos, HealTask> tasks = healing.computeIfAbsent(key, k -> new HashMap<>());
+
+                if (colony.getServerBuildingManager().getBuilding(pos) != rebuilt)
+                {
+                    tasks.remove(pos);
+                    return;
+                }
+                tasks.put(pos, new HealTask(snap.level(), done.getGameTime() + HEAL_WINDOW_TICKS));
                 director.queueOutfit(rebuilt);
             }, failed -> cooldownUntil.computeIfAbsent(key, k -> new HashMap<>()).put(pos, failed.getGameTime() + FAILED_PASTE_COOLDOWN_TICKS)));
         }
@@ -1023,7 +1262,7 @@ public class DamageWatch
             director.queueOutfit(rebuilt);
         }
         ColonyAutopilot.LOGGER.info("[{}] the hut-block sentinel rebuilt the {} the creep had erased — re-registered at level {}, the creep guard is raising it from the blueprint",
-          colony.getName(), building.getBuildingDisplayName(), snap.level());
+          colony.getName(), SiteSelector.plainName(building), snap.level());
     }
 
     private static Set<BlockPos> payForGoods(final IColony colony, final ServerLevel level, final Blueprint blueprint, final BlockPos zero, final String name)
@@ -1124,7 +1363,8 @@ public class DamageWatch
     private RotationMirror rotationFor(final Blueprint blueprint, final BuildingMemory snap, final ServerLevel level)
     {
         blueprint.setRotationMirror(RotationMirror.NONE, level);
-        final BlockState anchor = blueprint.getBlockState(blueprint.getPrimaryBlockOffset());
+        final BlockPos offset = blueprint.getPrimaryBlockOffset();
+        final BlockState anchor = blueprint.getPalette()[blueprint.getStructure()[offset.getY()][offset.getZ()][offset.getX()] & 0xFFFF];
         if (anchor != null && anchor.hasProperty(AbstractBlockHut.FACING))
         {
             final int structureRotation = anchor.getValue(AbstractBlockHut.FACING).get2DDataValue();
@@ -1155,18 +1395,28 @@ public class DamageWatch
         return false;
     }
 
-    private void clearCreepAround(final ServerLevel level, final BlockPos center)
+    private void clearCreepAround(final IColony colony, final ServerLevel level, final BlockPos center)
     {
         final Map<Block, Block> cure = SporeCompat.creepCure();
+        final List<SiteSelector.Footprint> zones = ProtectedZones.footprintsFor(colony);
         final BlockPos.MutableBlockPos p = new BlockPos.MutableBlockPos();
         for (int dx = -HEAL_CLEAR_RADIUS; dx <= HEAL_CLEAR_RADIUS; dx++)
         {
             for (int dz = -HEAL_CLEAR_RADIUS; dz <= HEAL_CLEAR_RADIUS; dz++)
             {
+                if (SiteSelector.insideAny(zones, center.getX() + dx, center.getZ() + dz))
+                {
+                    continue;
+                }
 
                 for (int dy = -1; dy <= HEAL_CLEAR_RADIUS + 2; dy++)
                 {
-                    final Block block = level.getBlockState(p.set(center.getX() + dx, center.getY() + dy, center.getZ() + dz)).getBlock();
+                    final BlockState state = level.getBlockState(p.set(center.getX() + dx, center.getY() + dy, center.getZ() + dz));
+                    if (GroundsWarden.naturalMycelium(level, p, state))
+                    {
+                        continue;
+                    }
+                    final Block block = state.getBlock();
                     final Block clean = cure.get(block);
                     if (clean != null)
                     {
@@ -1197,6 +1447,8 @@ public class DamageWatch
     private static final class PacedCreativePaste implements ITickedWorldOperation
     {
         private final StructurePlacer placer;
+
+        private final IBuilding host;
         private final boolean keepWorld;
         private final Set<BlockPos> paidGoods;
 
@@ -1208,10 +1460,11 @@ public class DamageWatch
         private long lastStepTick = Long.MIN_VALUE;
         private int stepsThisTick = 0;
 
-        PacedCreativePaste(final StructurePlacer placer, final boolean keepWorld, final Set<BlockPos> paidGoods, final Consumer<ServerLevel> onDone,
-          final Consumer<ServerLevel> onFailed)
+        PacedCreativePaste(final StructurePlacer placer, final IBuilding host, final boolean keepWorld, final Set<BlockPos> paidGoods,
+          final Consumer<ServerLevel> onDone, final Consumer<ServerLevel> onFailed)
         {
             this.placer = placer;
+            this.host = host;
             this.keepWorld = keepWorld;
             this.paidGoods = paidGoods;
             this.onDone = onDone;
@@ -1256,6 +1509,31 @@ public class DamageWatch
             return want != null && !held.is(want.getBlock()) && skips(world, over, want);
         }
 
+        void layPaidGoods()
+        {
+            if (paidGoods == null || !(placer.getHandler().getWorld() instanceof ServerLevel world))
+            {
+                return;
+            }
+            try
+            {
+                for (final BlockPos pos : paidGoods)
+                {
+                    final BlockInfo info = placer.getHandler().getBluePrint().getBlockInfoAsMap().get(placer.getHandler().getStructurePosFromWorld(pos));
+                    final BlockState want = info == null ? null : info.getState();
+                    if (want != null && WorldUtil.isChunkLoaded(world, pos.getX() >> 4, pos.getZ() >> 4)
+                          && !world.getBlockState(pos).is(want.getBlock()) && !skips(world, pos, want))
+                    {
+                        world.setBlockAndUpdate(pos, want);
+                    }
+                }
+            }
+            catch (final RuntimeException e)
+            {
+                ColonyAutopilot.LOGGER.warn("the dropped paste at {} could not lay the goods it was paid for", placer.getHandler().getCenterPos().toShortString(), e);
+            }
+        }
+
         @Override
         public boolean apply(final ServerLevel world)
         {
@@ -1282,6 +1560,16 @@ public class DamageWatch
                 if (stepsThisTick >= PASTE_STEPS_PER_TICK)
                 {
                     return currentPos == null;
+                }
+
+                if (host.getColony().getServerBuildingManager().getBuilding(host.getID()) != host)
+                {
+                    ColonyAutopilot.LOGGER.debug("[{}] the creative paste of the {} at {} is dropped: the building left the registry while the paste waited or ran, and nothing more of it is laid",
+                      host.getColony().getName(), SiteSelector.plainName(host), host.getID().toShortString());
+                    currentPos = null;
+                    layPaidGoods();
+                    onDone.accept(world);
+                    return true;
                 }
                 stepsThisTick++;
 
@@ -1344,6 +1632,7 @@ public class DamageWatch
 
                 ColonyAutopilot.LOGGER.warn("the creative paste at {} failed and was dropped", placer.getHandler().getCenterPos().toShortString(), e);
                 currentPos = null;
+                layPaidGoods();
                 onDone.accept(world);
                 if (onFailed != null)
                 {

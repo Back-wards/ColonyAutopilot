@@ -34,7 +34,7 @@ public final class ChatCurtain
         AutopilotConfig.MUTE_COLONY_CHAT.set(muted);
         AutopilotConfig.CLIENT_SPEC.save();
         source.sendSuccess(() -> Component.literal(muted
-          ? "Colony chatter muted for you — MineColonies announcements and the autopilot's village news stay out of your chat. '/colonyautopilot chat on' brings them back."
+          ? "Colony chatter muted for you — MineColonies announcements and the autopilot's village news stay out of your chat, and so do MineColonies' answers to your own clicks and commands (a refused colony founding, 'no permission'). '/colonyautopilot chat on' brings them back."
           : "Colony chatter is back on for you."), false);
         return 1;
     }

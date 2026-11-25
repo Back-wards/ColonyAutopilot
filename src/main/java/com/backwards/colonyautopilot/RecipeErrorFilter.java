@@ -14,6 +14,8 @@ final class RecipeErrorFilter extends AbstractFilter
 
     private static final String ABSENT_RECIPE = "recipe farmersdelight:";
 
+    private static final String ABSENT_ADDON_RECIPE = "recipe mynethersdelight:";
+
     private RecipeErrorFilter()
     {
         super(Filter.Result.DENY, Filter.Result.NEUTRAL);
@@ -42,7 +44,7 @@ final class RecipeErrorFilter extends AbstractFilter
         if (event.getLevel() != null && event.getLevel().isMoreSpecificThan(Level.ERROR)
               && RECIPE_MANAGER.equals(event.getLoggerName())
               && event.getMessage() != null
-              && event.getMessage().getFormattedMessage().contains(ABSENT_RECIPE))
+              && absentRecipe(event.getMessage().getFormattedMessage()))
         {
 
             if (AutopilotConfig.SPEC.isLoaded() && !AutopilotConfig.MUTE_FD_RECIPE_ERRORS.get())
@@ -52,5 +54,10 @@ final class RecipeErrorFilter extends AbstractFilter
             return Filter.Result.DENY;
         }
         return Filter.Result.NEUTRAL;
+    }
+
+    private static boolean absentRecipe(final String message)
+    {
+        return message.contains(ABSENT_RECIPE) || message.contains(ABSENT_ADDON_RECIPE);
     }
 }

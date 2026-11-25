@@ -1,44 +1,30 @@
 // Colony Autopilot - created by Backwards - https://www.curseforge.com/members/backwards/projects - Copyright (C) 2026 Backwards - GPL-3.0
 package com.backwards.colonyautopilot;
 
-import com.minecolonies.api.colony.ICitizenData;
-import com.minecolonies.api.colony.IColony;
-import com.minecolonies.api.colony.IColonyManager;
-import com.minecolonies.api.entity.ai.combat.threat.IThreatTableEntity;
 import com.minecolonies.api.entity.citizen.AbstractEntityCitizen;
-import com.minecolonies.core.colony.buildings.AbstractBuildingGuards;
-import com.minecolonies.core.entity.ai.workers.guard.AbstractEntityAIGuard;
-import com.minecolonies.core.util.citizenutils.CitizenItemUtils;
-import com.tacz.guns.api.entity.IGunOperator;
-import com.tacz.guns.api.entity.ShootResult;
 import com.tacz.guns.api.event.common.EntityHurtByGunEvent;
 import com.tacz.guns.api.event.common.EntityKillByGunEvent;
 import com.tacz.guns.api.event.common.GunDamageSourcePart;
-import com.tacz.guns.api.event.common.GunShootEvent;
 import com.tacz.guns.api.item.IGun;
-import com.tacz.guns.api.item.gun.FireMode;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.world.InteractionHand;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.OwnableEntity;
 import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.enchantment.Enchantment;
 import net.minecraft.world.level.Level;
 import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import java.util.WeakHashMap;
 
 final class GunEnchants
 {
@@ -61,36 +47,6 @@ final class GunEnchants
     private static final int CRYO_STANDSTILL = 9;
     private static final float INCENDIARY_SECONDS_PER_LEVEL = 3F;
 
-    private static final ResourceLocation STANDARD_ISSUE = ResourceLocation.fromNamespaceAndPath("tacz", "ak47");
-
-    static ItemStack standardIssue()
-    {
-        final net.minecraft.server.MinecraftServer server = net.neoforged.neoforge.server.ServerLifecycleHooks.getCurrentServer();
-        if (server == null)
-        {
-            return ItemStack.EMPTY;
-        }
-        try
-        {
-            final ItemStack rifle = com.tacz.guns.api.item.builder.GunItemBuilder.create().setId(STANDARD_ISSUE)
-              .setFireMode(com.tacz.guns.api.item.gun.FireMode.AUTO).setAmmoCount(30).setAmmoInBarrel(true).build(server.registryAccess());
-            if (rifle.isEmpty())
-            {
-
-                ColonyAutopilot.LOGGER.warn("No standard-issue rifle for the gunners: TaCZ has no gun {} loaded (is the default gun pack installed?)", STANDARD_ISSUE);
-                return ItemStack.EMPTY;
-            }
-            net.minecraft.world.item.component.CustomData.update(net.minecraft.core.component.DataComponents.CUSTOM_DATA, rifle,
-              tag -> tag.putBoolean(AutopilotConfig.ISSUED_GUN_TAG, true));
-            return rifle;
-        }
-        catch (final RuntimeException e)
-        {
-            ColonyAutopilot.LOGGER.warn("No standard-issue rifle for the gunners: TaCZ could not build {} (is the default gun pack installed?)", STANDARD_ISSUE, e);
-            return ItemStack.EMPTY;
-        }
-    }
-
     @SubscribeEvent
     public void onAnvil(final net.neoforged.neoforge.event.AnvilUpdateEvent event)
     {
@@ -105,12 +61,6 @@ final class GunEnchants
                     return;
                 }
             }
-        }
-        if ((addition.isEnchanted() || addition.has(net.minecraft.core.component.DataComponents.STORED_ENCHANTMENTS))
-              && event.getLeft().getOrDefault(net.minecraft.core.component.DataComponents.CUSTOM_DATA,
-                   net.minecraft.world.item.component.CustomData.EMPTY).contains(AutopilotConfig.ISSUED_GUN_TAG))
-        {
-            event.setCanceled(true);
         }
     }
 
@@ -172,100 +122,6 @@ final class GunEnchants
         }
     }
 
-    private final Map<AbstractEntityCitizen, Long> aiShots = new WeakHashMap<>();
-
-    private boolean following;
-
-    private static final int FOLLOW_UP_TICKS = 10;
-
-    @SubscribeEvent
-    public void onGunShoot(final GunShootEvent event)
-    {
-        if (!following && event.getLogicalSide().isServer() && event.getShooter() instanceof AbstractEntityCitizen citizen
-              && AutopilotConfig.SPEC.isLoaded() && AutopilotConfig.live(AutopilotConfig.FULL_AUTO_GUNNERS))
-        {
-            aiShots.put(citizen, citizen.level().getGameTime());
-        }
-    }
-
-    @SubscribeEvent
-    public void onServerTick(final ServerTickEvent.Post event)
-    {
-        if (aiShots.isEmpty())
-        {
-            return;
-        }
-        following = true;
-        try
-        {
-            aiShots.entrySet().removeIf(shot -> !followUp(shot.getKey(), shot.getValue()));
-        }
-        finally
-        {
-            following = false;
-        }
-    }
-
-    @SubscribeEvent
-    public void onServerTickRegun(final ServerTickEvent.Post event)
-    {
-        if (!AutopilotConfig.SPEC.isLoaded() || !AutopilotConfig.masterOn())
-        {
-            return;
-        }
-        for (final IColony colony : IColonyManager.getInstance().getAllColonies())
-        {
-            for (final ICitizenData data : colony.getCitizenManager().getCitizens())
-            {
-                final AbstractEntityCitizen citizen = data.getEntity().orElse(null);
-                if (citizen == null || !citizen.getMainHandItem().isEmpty())
-                {
-                    continue;
-                }
-                final int slot = data.getInventory().getHeldItemSlot(InteractionHand.MAIN_HAND);
-                if (slot >= 0 && slot < data.getInventory().getSlots()
-                      && IGun.getIGunOrNull(data.getInventory().getStackInSlot(slot)) != null)
-                {
-                    CitizenItemUtils.setHeldItem(citizen, InteractionHand.MAIN_HAND, slot);
-                }
-            }
-        }
-    }
-
-    private static boolean followUp(final AbstractEntityCitizen citizen, final long shotAt)
-    {
-        final long since = citizen.level().getGameTime() - shotAt;
-
-        if (!citizen.isAlive() || since >= FOLLOW_UP_TICKS || !(citizen instanceof IThreatTableEntity fighter)
-              || citizen.getCitizenData() == null || !(citizen.getCitizenData().getWorkBuilding() instanceof AbstractBuildingGuards))
-        {
-            return false;
-        }
-        final ItemStack held = citizen.getInventoryCitizen().getHeldItem(InteractionHand.MAIN_HAND);
-        final IGun gun = IGun.getIGunOrNull(held);
-        if (gun == null || gun.getFireMode(held) != FireMode.AUTO)
-        {
-            return false;
-        }
-        final IGunOperator operator = IGunOperator.fromLivingEntity(citizen);
-
-        if (since == 0 || operator.getSynShootCoolDown() > 0)
-        {
-            return true;
-        }
-
-        final LivingEntity target = fighter.getThreatTable().getTargetMob();
-        if (target == null || !target.isAlive() || !citizen.getSensing().hasLineOfSight(target)
-              || target != citizen.getLastHurtByMob() && !AbstractEntityAIGuard.isAttackableTarget(citizen, target))
-        {
-            return false;
-        }
-
-        citizen.getLookControl().setLookAt(target);
-        final ShootResult result = operator.shoot(citizen::getXRot, citizen::getYRot);
-        return result == ShootResult.SUCCESS || result == ShootResult.COOL_DOWN;
-    }
-
     private static void shrapnel(final ItemStack gun, final LivingEntity target, final LivingEntity attacker, final float bulletDamage,
       final DamageSource source)
     {
@@ -274,8 +130,11 @@ final class GunEnchants
         {
             return;
         }
+
         final List<LivingEntity> bystanders = target.level().getEntitiesOfClass(LivingEntity.class, target.getBoundingBox().inflate(SHRAPNEL_REACH),
-          nearby -> nearby != target && nearby != attacker && nearby.isAlive() && (nearby instanceof Enemy || isSpore(nearby)));
+          nearby -> nearby != target && nearby != attacker && nearby.isAlive() && (nearby instanceof Enemy || isSpore(nearby))
+                      && !(nearby instanceof OwnableEntity owned && owned.getOwnerUUID() != null)
+                      && !nearby.getType().is(ColonyAutopilot.GUARDS_IGNORE));
 
         bystanders.sort(java.util.Comparator.comparingDouble(nearby -> nearby.distanceToSqr(target)));
         for (int i = 0; i < bystanders.size() && i < SHRAPNEL_HIT_PER_LEVEL * shrapnel; i++)
@@ -349,8 +208,7 @@ final class GunEnchants
         {
             return null;
         }
-        final ItemStack held = attacker instanceof AbstractEntityCitizen citizen
-                                 ? citizen.getInventoryCitizen().getHeldItem(InteractionHand.MAIN_HAND) : attacker.getMainHandItem();
+        final ItemStack held = attacker.getMainHandItem();
         final IGun gun = IGun.getIGunOrNull(held);
         return gun != null && held.isEnchanted() && gun.getGunId(held).equals(gunId) ? held : null;
     }

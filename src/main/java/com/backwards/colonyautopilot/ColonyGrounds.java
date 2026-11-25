@@ -12,6 +12,7 @@ import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.saveddata.SavedData;
 
 import java.util.ArrayList;
@@ -56,11 +57,17 @@ public final class ColonyGrounds extends SavedData
 
     private final Map<Integer, Set<Long>> owedRepairs = new HashMap<>();
 
+    private final Map<Integer, Map<Long, Long>> recycledAt = new HashMap<>();
+
     private final Map<Integer, Map<Long, SentinelMemory>> sentinelMemory = new HashMap<>();
 
     private final Map<Integer, Set<Long>> causeways = new HashMap<>();
 
     private final Map<Integer, Map<Long, long[]>> roads = new HashMap<>();
+
+    private final Map<Integer, Set<Long>> roadWater = new HashMap<>();
+
+    private final Map<Integer, Map<Long, long[]>> roadLines = new HashMap<>();
 
     static final short NO_GROUND = Short.MIN_VALUE;
 
@@ -82,10 +89,21 @@ public final class ColonyGrounds extends SavedData
 
     private final Map<Integer, long[]> ledgers = new HashMap<>();
 
+    private final Map<Integer, Set<String>> structuresYield = new HashMap<>();
+
+    private final List<Set<Integer>> colonyIds = List.of(apronDoneAt.keySet(), lastDailyRound.keySet(), anchorOffsets.keySet(),
+      fronts.keySet(), fields.keySet(), ponds.keySet(), decorations.keySet(), warehouseStock.keySet(), warehouseSeeded.keySet(),
+      tornDown.keySet(), crushersWoken.keySet(), owedRepairs.keySet(), recycledAt.keySet(), sentinelMemory.keySet(), causeways.keySet(), roads.keySet(),
+      roadWater.keySet(), roadLines.keySet(), groundMemory.keySet(), overrides.keySet(), treasury.keySet(), economyAnnounced, lastJobKind.keySet(),
+      upgradesSinceLastPlacement.keySet(), stockLines.keySet(), raidPay.keySet(), reserves.keySet(), ledgers.keySet(),
+      structuresYield.keySet());
+
     private long ledgerDay = -1;
     private long ledgerWorldDay = -1;
 
     private final Map<Long, Long> golemFalls = new HashMap<>();
+
+    private final Map<String, Map.Entry<String, Boolean>> stablePacks = new HashMap<>();
 
     record Reserve(long credits, long stocked, String id, String name, String good)
     {
@@ -171,11 +189,6 @@ public final class ColonyGrounds extends SavedData
         setDirty();
     }
 
-    Set<Long> causewayColumns(final int colonyId)
-    {
-        return Set.copyOf(causeways.getOrDefault(colonyId, Set.of()));
-    }
-
     boolean isCausewayColumn(final int colonyId, final long column)
     {
         final Set<Long> raised = causeways.get(colonyId);
@@ -225,6 +238,36 @@ public final class ColonyGrounds extends SavedData
         {
             roads.put(colonyId, packed);
         }
+        setDirty();
+    }
+
+    Set<Long> roadWater(final int colonyId)
+    {
+        return roadWater.computeIfAbsent(colonyId, k -> new HashSet<>());
+    }
+
+    long[] roadLine(final int colonyId, final BlockPos anchor)
+    {
+        final Map<Long, long[]> lines = roadLines.get(colonyId);
+        return lines == null ? null : lines.get(anchor.asLong());
+    }
+
+    void setRoadLine(final int colonyId, final BlockPos anchor, final long[] line)
+    {
+        if (line == null)
+        {
+            final Map<Long, long[]> lines = roadLines.get(colonyId);
+            if (lines != null && lines.remove(anchor.asLong()) != null)
+            {
+                if (lines.isEmpty())
+                {
+                    roadLines.remove(colonyId);
+                }
+                setDirty();
+            }
+            return;
+        }
+        roadLines.computeIfAbsent(colonyId, k -> new HashMap<>()).put(anchor.asLong(), line);
         setDirty();
     }
 
@@ -308,6 +351,20 @@ public final class ColonyGrounds extends SavedData
     void pruneGolemFalls(final long gameTime)
     {
         if (golemFalls.values().removeIf(fell -> fell < gameTime))
+        {
+            setDirty();
+        }
+    }
+
+    Boolean stableInPack(final String pack, final String edition)
+    {
+        final Map.Entry<String, Boolean> answer = stablePacks.get(pack);
+        return answer != null && answer.getKey().equals(edition) ? answer.getValue() : null;
+    }
+
+    void setStableInPack(final String pack, final String edition, final boolean stable)
+    {
+        if (!Map.entry(edition, stable).equals(stablePacks.put(pack, Map.entry(edition, stable))))
         {
             setDirty();
         }
@@ -442,6 +499,26 @@ public final class ColonyGrounds extends SavedData
     {
         final Set<Long> owed = owedRepairs.get(colonyId);
         if (owed != null && owed.remove(hut.asLong()))
+        {
+            setDirty();
+        }
+    }
+
+    Map<Long, Long> recycledAt(final int colonyId)
+    {
+        return java.util.Collections.unmodifiableMap(recycledAt.getOrDefault(colonyId, Map.of()));
+    }
+
+    void setRecycledAt(final int colonyId, final BlockPos building, final long gameTime)
+    {
+        recycledAt.computeIfAbsent(colonyId, k -> new HashMap<>()).put(building.asLong(), gameTime);
+        setDirty();
+    }
+
+    void removeRecycledAt(final int colonyId, final BlockPos building)
+    {
+        final Map<Long, Long> recycled = recycledAt.get(colonyId);
+        if (recycled != null && recycled.remove(building.asLong()) != null)
         {
             setDirty();
         }
@@ -664,33 +741,31 @@ public final class ColonyGrounds extends SavedData
         }
     }
 
+    boolean structuresYield(final int colonyId, final Block hut)
+    {
+        final Set<String> huts = structuresYield.get(colonyId);
+        return huts != null && huts.contains(BuiltInRegistries.BLOCK.getKey(hut).toString());
+    }
+
+    void setStructuresYield(final int colonyId, final Block hut, final boolean mayYield)
+    {
+        final String id = BuiltInRegistries.BLOCK.getKey(hut).toString();
+        final boolean changed = mayYield
+                                  ? structuresYield.computeIfAbsent(colonyId, k -> new HashSet<>()).add(id)
+                                  : structuresYield.containsKey(colonyId) && structuresYield.get(colonyId).remove(id);
+        if (changed)
+        {
+            setDirty();
+        }
+    }
+
     void forget(final int colonyId)
     {
-        boolean dropped = apronDoneAt.remove(colonyId) != null;
-        dropped |= lastDailyRound.remove(colonyId) != null;
-        dropped |= anchorOffsets.remove(colonyId) != null;
-        dropped |= fronts.remove(colonyId) != null;
-        dropped |= fields.remove(colonyId) != null;
-        dropped |= ponds.remove(colonyId) != null;
-        dropped |= decorations.remove(colonyId) != null;
-        dropped |= warehouseStock.remove(colonyId) != null;
-        dropped |= warehouseSeeded.remove(colonyId) != null;
-        dropped |= tornDown.remove(colonyId) != null;
-        dropped |= crushersWoken.remove(colonyId) != null;
-        dropped |= owedRepairs.remove(colonyId) != null;
-        dropped |= sentinelMemory.remove(colonyId) != null;
-        dropped |= overrides.remove(colonyId) != null;
-        dropped |= causeways.remove(colonyId) != null;
-        dropped |= roads.remove(colonyId) != null;
-        dropped |= groundMemory.remove(colonyId) != null;
-        dropped |= treasury.remove(colonyId) != null;
-        dropped |= economyAnnounced.remove(colonyId);
-        dropped |= lastJobKind.remove(colonyId) != null;
-        dropped |= upgradesSinceLastPlacement.remove(colonyId) != null;
-        dropped |= stockLines.remove(colonyId) != null;
-        dropped |= raidPay.remove(colonyId) != null;
-        dropped |= reserves.remove(colonyId) != null;
-        dropped |= ledgers.remove(colonyId) != null;
+        boolean dropped = false;
+        for (final Set<Integer> ids : colonyIds)
+        {
+            dropped |= ids.remove(colonyId);
+        }
         if (dropped)
         {
             setDirty();
@@ -707,6 +782,9 @@ public final class ColonyGrounds extends SavedData
         pruned |= down != null && down.retainAll(liveAnchors);
         final Set<Long> owed = owedRepairs.get(colonyId);
         pruned |= owed != null && owed.retainAll(liveAnchors);
+
+        final Map<Long, Long> recycled = recycledAt.get(colonyId);
+        pruned |= recycled != null && recycled.keySet().retainAll(liveAnchors);
 
         final Map<Long, Map<String, Integer>> lines = stockLines.get(colonyId);
         pruned |= lines != null && lines.keySet().retainAll(liveAnchors);
@@ -727,31 +805,11 @@ public final class ColonyGrounds extends SavedData
 
     void retain(final Set<Integer> liveColonyIds)
     {
-        boolean pruned = apronDoneAt.keySet().retainAll(liveColonyIds);
-        pruned |= lastDailyRound.keySet().retainAll(liveColonyIds);
-        pruned |= anchorOffsets.keySet().retainAll(liveColonyIds);
-        pruned |= fronts.keySet().retainAll(liveColonyIds);
-        pruned |= fields.keySet().retainAll(liveColonyIds);
-        pruned |= ponds.keySet().retainAll(liveColonyIds);
-        pruned |= decorations.keySet().retainAll(liveColonyIds);
-        pruned |= warehouseStock.keySet().retainAll(liveColonyIds);
-        pruned |= warehouseSeeded.keySet().retainAll(liveColonyIds);
-        pruned |= tornDown.keySet().retainAll(liveColonyIds);
-        pruned |= crushersWoken.keySet().retainAll(liveColonyIds);
-        pruned |= owedRepairs.keySet().retainAll(liveColonyIds);
-        pruned |= sentinelMemory.keySet().retainAll(liveColonyIds);
-        pruned |= overrides.keySet().retainAll(liveColonyIds);
-        pruned |= causeways.keySet().retainAll(liveColonyIds);
-        pruned |= roads.keySet().retainAll(liveColonyIds);
-        pruned |= groundMemory.keySet().retainAll(liveColonyIds);
-        pruned |= treasury.keySet().retainAll(liveColonyIds);
-        pruned |= economyAnnounced.retainAll(liveColonyIds);
-        pruned |= lastJobKind.keySet().retainAll(liveColonyIds);
-        pruned |= upgradesSinceLastPlacement.keySet().retainAll(liveColonyIds);
-        pruned |= stockLines.keySet().retainAll(liveColonyIds);
-        pruned |= raidPay.keySet().retainAll(liveColonyIds);
-        pruned |= reserves.keySet().retainAll(liveColonyIds);
-        pruned |= ledgers.keySet().retainAll(liveColonyIds);
+        boolean pruned = false;
+        for (final Set<Integer> ids : colonyIds)
+        {
+            pruned |= ids.retainAll(liveColonyIds);
+        }
         if (pruned)
         {
             setDirty();
@@ -761,31 +819,12 @@ public final class ColonyGrounds extends SavedData
     @Override
     public CompoundTag save(final CompoundTag tag, final HolderLookup.Provider registries)
     {
+
         final Set<Integer> ids = new HashSet<>(apronDoneAt.keySet());
-        ids.addAll(lastDailyRound.keySet());
-        ids.addAll(anchorOffsets.keySet());
-        ids.addAll(fronts.keySet());
-        ids.addAll(fields.keySet());
-        ids.addAll(ponds.keySet());
-        ids.addAll(decorations.keySet());
-        ids.addAll(warehouseStock.keySet());
-        ids.addAll(warehouseSeeded.keySet());
-        ids.addAll(tornDown.keySet());
-        ids.addAll(crushersWoken.keySet());
-        ids.addAll(owedRepairs.keySet());
-        ids.addAll(sentinelMemory.keySet());
-        ids.addAll(causeways.keySet());
-        ids.addAll(roads.keySet());
-        ids.addAll(groundMemory.keySet());
-        ids.addAll(overrides.keySet());
-        ids.addAll(treasury.keySet());
-        ids.addAll(economyAnnounced);
-        ids.addAll(lastJobKind.keySet());
-        ids.addAll(upgradesSinceLastPlacement.keySet());
-        ids.addAll(stockLines.keySet());
-        ids.addAll(raidPay.keySet());
-        ids.addAll(reserves.keySet());
-        ids.addAll(ledgers.keySet());
+        for (final Set<Integer> recorded : colonyIds)
+        {
+            ids.addAll(recorded);
+        }
         final ListTag colonies = new ListTag();
         for (final int id : ids)
         {
@@ -918,6 +957,18 @@ public final class ColonyGrounds extends SavedData
             entry.putLongArray("tornDown", packed(tornDown.getOrDefault(id, Set.of())));
             entry.putLongArray("crushersWoken", packed(crushersWoken.getOrDefault(id, Set.of())));
             entry.putLongArray("owedRepairs", packed(owedRepairs.getOrDefault(id, Set.of())));
+            final Map<Long, Long> recycled = recycledAt.getOrDefault(id, Map.of());
+            final long[] recycleSites = new long[recycled.size()];
+            final long[] recycleTimes = new long[recycled.size()];
+            int r = 0;
+            for (final Map.Entry<Long, Long> site : recycled.entrySet())
+            {
+                recycleSites[r] = site.getKey();
+                recycleTimes[r] = site.getValue();
+                r++;
+            }
+            entry.putLongArray("recycleSites", recycleSites);
+            entry.putLongArray("recycleTimes", recycleTimes);
             final ListTag remembered = new ListTag();
             for (final Map.Entry<Long, SentinelMemory> building : sentinelMemory.getOrDefault(id, Map.of()).entrySet())
             {
@@ -958,9 +1009,15 @@ public final class ColonyGrounds extends SavedData
                 final CompoundTag saved = new CompoundTag();
                 saved.putLong("anchor", road.getKey());
                 saved.putLongArray("blocks", road.getValue());
+                final long[] line = roadLines.getOrDefault(id, Map.of()).get(road.getKey());
+                if (line != null)
+                {
+                    saved.putLongArray("line", line);
+                }
                 ledger.add(saved);
             }
             entry.put("roads", ledger);
+            entry.putLongArray("roadWater", packed(roadWater.getOrDefault(id, Set.of())));
             final Map<Long, short[]> ground = groundMemory.getOrDefault(id, Map.of());
             final long[] groundChunks = new long[ground.size()];
             final int[] groundHeights = new int[ground.size() * 128];
@@ -995,6 +1052,12 @@ public final class ColonyGrounds extends SavedData
                 lines.add(saved);
             }
             entry.put("stockLines", lines);
+            final ListTag yielding = new ListTag();
+            for (final String hut : structuresYield.getOrDefault(id, Set.of()))
+            {
+                yielding.add(StringTag.valueOf(hut));
+            }
+            entry.put("structuresYield", yielding);
             colonies.add(entry);
         }
         tag.put("colonies", colonies);
@@ -1011,6 +1074,16 @@ public final class ColonyGrounds extends SavedData
         }
         tag.putLongArray("golemPosts", fallenPosts);
         tag.putLongArray("golemFalls", fallTimes);
+        final ListTag packs = new ListTag();
+        for (final Map.Entry<String, Map.Entry<String, Boolean>> pack : stablePacks.entrySet())
+        {
+            final CompoundTag saved = new CompoundTag();
+            saved.putString("pack", pack.getKey());
+            saved.putString("edition", pack.getValue().getKey());
+            saved.putBoolean("stable", pack.getValue().getValue());
+            packs.add(saved);
+        }
+        tag.put("stablePacks", packs);
         return tag;
     }
 
@@ -1023,6 +1096,15 @@ public final class ColonyGrounds extends SavedData
             out[i++] = pos;
         }
         return out;
+    }
+
+    private static Set<Long> unpacked(final long[] positions, final Set<Long> into)
+    {
+        for (final long pos : positions)
+        {
+            into.add(pos);
+        }
+        return into;
     }
 
     static ColonyGrounds load(final CompoundTag tag, final HolderLookup.Provider registries)
@@ -1041,6 +1123,12 @@ public final class ColonyGrounds extends SavedData
             {
                 grounds.golemFalls.put(fallenPosts[j], fallTimes[j]);
             }
+        }
+        final ListTag packs = tag.getList("stablePacks", Tag.TAG_COMPOUND);
+        for (int j = 0; j < packs.size(); j++)
+        {
+            final CompoundTag saved = packs.getCompound(j);
+            grounds.stablePacks.put(saved.getString("pack"), Map.entry(saved.getString("edition"), saved.getBoolean("stable")));
         }
         final ListTag colonies = tag.getList("colonies", Tag.TAG_COMPOUND);
         for (int i = 0; i < colonies.size(); i++)
@@ -1122,22 +1210,12 @@ public final class ColonyGrounds extends SavedData
             final long[] laid = entry.getLongArray("fields");
             if (laid.length > 0)
             {
-                final Set<Long> set = new HashSet<>();
-                for (final long pos : laid)
-                {
-                    set.add(pos);
-                }
-                grounds.fields.put(id, set);
+                grounds.fields.put(id, unpacked(laid, new HashSet<>()));
             }
             final long[] dug = entry.getLongArray("ponds");
             if (dug.length > 0)
             {
-                final Set<Long> set = new HashSet<>();
-                for (final long pos : dug)
-                {
-                    set.add(pos);
-                }
-                grounds.ponds.put(id, set);
+                grounds.ponds.put(id, unpacked(dug, new HashSet<>()));
             }
             final long[] decoAnchors = entry.getLongArray("decoAnchors");
             final int[] decoBoxes = entry.getIntArray("decoBoxes");
@@ -1180,32 +1258,28 @@ public final class ColonyGrounds extends SavedData
             final long[] down = entry.getLongArray("tornDown");
             if (down.length > 0)
             {
-                final Set<Long> set = new HashSet<>();
-                for (final long pos : down)
-                {
-                    set.add(pos);
-                }
-                grounds.tornDown.put(id, set);
+                grounds.tornDown.put(id, unpacked(down, new HashSet<>()));
             }
             final long[] woken = entry.getLongArray("crushersWoken");
             if (woken.length > 0)
             {
-                final Set<Long> set = new HashSet<>();
-                for (final long pos : woken)
-                {
-                    set.add(pos);
-                }
-                grounds.crushersWoken.put(id, set);
+                grounds.crushersWoken.put(id, unpacked(woken, new HashSet<>()));
             }
             final long[] owed = entry.getLongArray("owedRepairs");
             if (owed.length > 0)
             {
-                final Set<Long> set = new LinkedHashSet<>();
-                for (final long pos : owed)
+                grounds.owedRepairs.put(id, unpacked(owed, new LinkedHashSet<>()));
+            }
+            final long[] recycleSites = entry.getLongArray("recycleSites");
+            final long[] recycleTimes = entry.getLongArray("recycleTimes");
+            if (recycleSites.length > 0 && recycleSites.length == recycleTimes.length)
+            {
+                final Map<Long, Long> recycled = new HashMap<>();
+                for (int j = 0; j < recycleSites.length; j++)
                 {
-                    set.add(pos);
+                    recycled.put(recycleSites[j], recycleTimes[j]);
                 }
-                grounds.owedRepairs.put(id, set);
+                grounds.recycledAt.put(id, recycled);
             }
             final ListTag remembered = entry.getList("sentinel", Tag.TAG_COMPOUND);
             if (!remembered.isEmpty())
@@ -1236,22 +1310,33 @@ public final class ColonyGrounds extends SavedData
             final long[] raised = entry.getLongArray("causeways");
             if (raised.length > 0)
             {
-                final Set<Long> set = new HashSet<>();
-                for (final long column : raised)
-                {
-                    set.add(column);
-                }
-                grounds.causeways.put(id, set);
+                grounds.causeways.put(id, unpacked(raised, new HashSet<>()));
             }
             final ListTag ledger = entry.getList("roads", Tag.TAG_COMPOUND);
             if (!ledger.isEmpty())
             {
                 final Map<Long, long[]> saved = new HashMap<>();
+                final Map<Long, long[]> lines = new HashMap<>();
                 for (int j = 0; j < ledger.size(); j++)
                 {
                     saved.put(ledger.getCompound(j).getLong("anchor"), ledger.getCompound(j).getLongArray("blocks"));
+
+                    if (ledger.getCompound(j).contains("line", Tag.TAG_LONG_ARRAY))
+                    {
+                        lines.put(ledger.getCompound(j).getLong("anchor"), ledger.getCompound(j).getLongArray("line"));
+                    }
                 }
                 grounds.roads.put(id, saved);
+                if (!lines.isEmpty())
+                {
+                    grounds.roadLines.put(id, lines);
+                }
+            }
+
+            final long[] inWater = entry.getLongArray("roadWater");
+            if (inWater.length > 0)
+            {
+                grounds.roadWater.put(id, unpacked(inWater, new HashSet<>()));
             }
             final long[] groundChunks = entry.getLongArray("groundChunks");
             final int[] groundHeights = entry.getIntArray("groundHeights");
@@ -1288,6 +1373,16 @@ public final class ColonyGrounds extends SavedData
                     saved.put(lines.getCompound(j).getLong("anchor"), building);
                 }
                 grounds.stockLines.put(id, saved);
+            }
+            final ListTag yielding = entry.getList("structuresYield", Tag.TAG_STRING);
+            if (!yielding.isEmpty())
+            {
+                final Set<String> huts = new HashSet<>();
+                for (int j = 0; j < yielding.size(); j++)
+                {
+                    huts.add(yielding.getString(j));
+                }
+                grounds.structuresYield.put(id, huts);
             }
         }
         return grounds;

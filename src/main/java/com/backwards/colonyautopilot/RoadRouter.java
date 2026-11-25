@@ -4,6 +4,10 @@ package com.backwards.colonyautopilot;
 import com.minecolonies.api.colony.IColony;
 import com.minecolonies.api.colony.IColonyManager;
 import com.minecolonies.api.util.WorldUtil;
+import it.unimi.dsi.fastutil.longs.Long2DoubleOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.FluidTags;
@@ -13,9 +17,9 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
@@ -46,6 +50,8 @@ final class RoadRouter
 
     private static final double DIAGONAL = 1.4142;
 
+    private static final double OFF_LINE = 1.0E-7;
+
     private record Column(int surface, boolean water, boolean roadbed, boolean own)
     {
     }
@@ -58,14 +64,17 @@ final class RoadRouter
 
     static final class Survey
     {
-        private final Map<Long, Column> columns = new HashMap<>();
+
+        private final Long2ObjectOpenHashMap<Column> columns = new Long2ObjectOpenHashMap<>();
         private final Map<Long, Boolean> claimed = new HashMap<>();
 
         private final Map<Long, Boolean> solid = new HashMap<>();
         private int budget;
 
         Set<Long> own;
-        private Set<Long> ownColumns;
+        private LongOpenHashSet ownColumns;
+
+        LongOpenHashSet line;
 
         Survey(final int budget)
         {
@@ -85,7 +94,7 @@ final class RoadRouter
             }
             if (ownColumns == null)
             {
-                ownColumns = new HashSet<>();
+                ownColumns = new LongOpenHashSet();
                 for (final long packed : own)
                 {
                     ownColumns.add(BlockPos.asLong(BlockPos.getX(packed), 0, BlockPos.getZ(packed)));
@@ -96,6 +105,10 @@ final class RoadRouter
 
         boolean centred(final int x, final int z)
         {
+            if (line != null)
+            {
+                return line.contains(BlockPos.asLong(x, 0, z));
+            }
             int round = 0;
             for (int dx = -1; dx <= 1; dx++)
             {
@@ -130,6 +143,9 @@ final class RoadRouter
 
         final int skyCeiling = Math.max(start.getY(), target.getY()) + 8;
         final BlockPos.MutableBlockPos probe = new BlockPos.MutableBlockPos();
+        final int depth = maxZ - minZ + 1;
+        final BitSet wallMemo = new BitSet();
+        final long began = System.nanoTime();
 
         final long startKey = key(start.getX(), start.getZ());
         final List<SiteSelector.Footprint> junctionCells = junctionCells(junctions);
@@ -146,8 +162,8 @@ final class RoadRouter
         }
 
         final PriorityQueue<Open> open = new PriorityQueue<>((a, b) -> Double.compare(a.f(), b.f()));
-        final Map<Long, Double> best = new HashMap<>();
-        final Map<Long, Long> from = new HashMap<>();
+        final Long2DoubleOpenHashMap best = new Long2DoubleOpenHashMap();
+        final Long2LongOpenHashMap from = new Long2LongOpenHashMap();
         best.put(startKey, 0.0D);
         open.add(new Open(estimate(start.getX(), start.getZ(), target, reach, targetBox, junctionCells), 0.0D, startKey));
         int expanded = 0;
@@ -163,6 +179,7 @@ final class RoadRouter
             {
                 survey.budget -= expanded - 1;
                 ColonyAutopilot.LOGGER.debug("router: no route from {} to {} within {} expansions", start.toShortString(), target.toShortString(), allowed);
+                clock("walk", start, expanded - 1, began);
                 return null;
             }
             final int x = x(node.key()), z = z(node.key());
@@ -202,6 +219,7 @@ final class RoadRouter
                       start.toShortString(), target.toShortString(), route == null ? "a route longer than the carver lays" : route.size() + " columns",
                       expanded, centre, shoulder, other, plain);
                 }
+                clock("walk", start, expanded, began);
                 return route;
             }
             for (int dx = -1; dx <= 1; dx++)
@@ -230,7 +248,7 @@ final class RoadRouter
                     }
 
                     final boolean goal = arrived(nx, nz, there.surface(), target, arrivalTop, targetBox, reach, junctions, next, startKey);
-                    if (!goal && insideWalls(walls, nx, nz))
+                    if (!goal && insideWalls(walls, nx, nz, (nx - minX) * depth + nz - minZ, wallMemo))
                     {
                         continue;
                     }
@@ -251,6 +269,10 @@ final class RoadRouter
                     {
                         cost += OFF_ROAD;
                     }
+                    if (survey.line != null && !survey.line.contains(BlockPos.asLong(nx, 0, nz)))
+                    {
+                        cost += OFF_LINE;
+                    }
                     final double g = node.g() + cost;
                     if (g < best.getOrDefault(next, Double.MAX_VALUE))
                     {
@@ -264,6 +286,7 @@ final class RoadRouter
         }
         survey.budget -= expanded;
         ColonyAutopilot.LOGGER.debug("router: no route from {} to {} — every reachable column tried ({} expansions)", start.toShortString(), target.toShortString(), expanded);
+        clock("walk", start, expanded, began);
         return null;
     }
 
@@ -299,6 +322,25 @@ final class RoadRouter
             }
         }
         return false;
+    }
+
+    private static boolean insideWalls(final List<SiteSelector.Footprint> walls, final int x, final int z, final int cell, final BitSet memo)
+    {
+        if (!memo.get(2 * cell))
+        {
+            memo.set(2 * cell);
+            memo.set(2 * cell + 1, insideWalls(walls, x, z));
+        }
+        return memo.get(2 * cell + 1);
+    }
+
+    private static void clock(final String search, final BlockPos start, final int expanded, final long began)
+    {
+        if (expanded > SITE_BUDGET)
+        {
+            ColonyAutopilot.LOGGER.debug("router: that {} from {} held the tick {} ms ({} expansions)", search, start.toShortString(),
+              (System.nanoTime() - began) / 100_000L / 10.0D, expanded);
+        }
     }
 
     private static double estimate(final int x, final int z, final BlockPos target, final int reach,
@@ -405,7 +447,7 @@ final class RoadRouter
         return top;
     }
 
-    private static List<int[]> unwind(final Map<Long, Long> from, final long goal, final long startKey)
+    private static List<int[]> unwind(final Long2LongOpenHashMap from, final long goal, final long startKey)
     {
         final List<int[]> route = new ArrayList<>();
         long at = goal;
@@ -467,6 +509,9 @@ final class RoadRouter
         final int minZ = Math.min(start.getZ(), target.getZ()) - MARGIN, maxZ = Math.max(start.getZ(), target.getZ()) + MARGIN;
         final int skyCeiling = Math.max(start.getY(), target.getY()) + 8;
         final BlockPos.MutableBlockPos probe = new BlockPos.MutableBlockPos();
+        final int depth = maxZ - minZ + 1;
+        final BitSet wallMemo = new BitSet();
+        final long began = System.nanoTime();
         final long startKey = key(start.getX(), start.getZ());
         final List<SiteSelector.Footprint> junctionCells = junctionCells(junctions);
         final Column first = column(level, colony, start.getX(), start.getZ(), skyCeiling, fresh, survey, probe);
@@ -480,8 +525,8 @@ final class RoadRouter
         }
 
         final PriorityQueue<Open> open = new PriorityQueue<>((a, b) -> Double.compare(a.f(), b.f()));
-        final Map<Long, Double> best = new HashMap<>();
-        final Map<Long, Long> from = new HashMap<>();
+        final Long2DoubleOpenHashMap best = new Long2DoubleOpenHashMap();
+        final Long2LongOpenHashMap from = new Long2LongOpenHashMap();
         final long startState = stairKey(start.getX() - minX, start.getZ() - minZ, first.surface());
         best.put(startState, 0.0D);
         open.add(new Open(estimate(start.getX(), start.getZ(), target, reach, targetBox, junctionCells), 0.0D, startState));
@@ -498,18 +543,19 @@ final class RoadRouter
             {
                 survey.budget -= expanded - 1;
                 ColonyAutopilot.LOGGER.debug("router: no stair from {} to {} within {} expansions", start.toShortString(), target.toShortString(), allowed);
+                clock("stair", start, expanded - 1, began);
                 return null;
             }
             final int x = minX + stairX(node.key()), z = minZ + stairZ(node.key()), tread = stairTread(node.key());
 
-            final Long parent = from.get(node.key());
-            final int way = parent == null ? NO_WAY : wayBetween(parent, node.key());
+            final int way = from.containsKey(node.key()) ? wayBetween(from.get(node.key()), node.key()) : NO_WAY;
             if (node.key() != startState && arrived(x, z, tread, target, arrivalTop, targetBox, reach, junctions, key(x, z), startKey))
             {
                 survey.budget -= expanded;
                 final List<int[]> stair = unwindStair(from, node.key(), startState, minX, minZ);
                 ColonyAutopilot.LOGGER.debug("router: stair {} to {} — {} after {} expansions", start.toShortString(), target.toShortString(),
                   stair == null ? "refused (too long, or laid over itself)" : stair.size() + " columns", expanded);
+                clock("stair", start, expanded, began);
                 return stair;
             }
             for (int d = 0; d < 8; d++)
@@ -529,7 +575,7 @@ final class RoadRouter
                     continue;
                 }
 
-                final boolean walled = insideWalls(walls, nx, nz);
+                final boolean walled = insideWalls(walls, nx, nz, (nx - minX) * depth + nz - minZ, wallMemo);
                 final double bound = estimate(nx, nz, target, reach, targetBox, junctionCells);
                 for (int dt = -1; dt <= 1; dt++)
                 {
@@ -567,6 +613,10 @@ final class RoadRouter
                     {
                         cost += OFF_ROAD;
                     }
+                    if (survey.line != null && !survey.line.contains(BlockPos.asLong(nx, 0, nz)))
+                    {
+                        cost += OFF_LINE;
+                    }
                     final double g = node.g() + cost;
                     final long next = stairKey(nx - minX, nz - minZ, nt);
                     if (g < best.getOrDefault(next, Double.MAX_VALUE))
@@ -581,10 +631,11 @@ final class RoadRouter
         survey.budget -= expanded;
         ColonyAutopilot.LOGGER.debug("router: no stair from {} to {} — every reachable column and height tried ({} expansions)",
           start.toShortString(), target.toShortString(), expanded);
+        clock("stair", start, expanded, began);
         return null;
     }
 
-    private static List<int[]> unwindStair(final Map<Long, Long> from, final long goal, final long startState, final int minX, final int minZ)
+    private static List<int[]> unwindStair(final Long2LongOpenHashMap from, final long goal, final long startState, final int minX, final int minZ)
     {
         final List<int[]> stair = new ArrayList<>();
         long at = goal;

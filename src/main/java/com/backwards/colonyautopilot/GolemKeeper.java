@@ -13,14 +13,14 @@ import net.minecraft.core.GlobalPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.tags.BlockTags;
 import net.minecraft.util.Tuple;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.animal.IronGolem;
-import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.entity.EntityTypeTest;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.pathfinder.PathType;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -31,6 +31,7 @@ import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -67,6 +68,8 @@ public class GolemKeeper
 
     private final Map<ColonyId, Map<Long, UUID>> guardians = new HashMap<>();
 
+    private final Map<ColonyId, Set<Long>> deferredTold = new HashMap<>();
+
     private final Map<UUID, GlobalPos> wentCold = new HashMap<>();
 
     private final Set<GlobalPos> twinCheck = new HashSet<>();
@@ -83,6 +86,7 @@ public class GolemKeeper
     {
         lastSpawn.clear();
         guardians.clear();
+        deferredTold.clear();
         wentCold.clear();
         twinCheck.clear();
     }
@@ -92,6 +96,7 @@ public class GolemKeeper
     {
         lastSpawn.clear();
         guardians.clear();
+        deferredTold.clear();
         wentCold.clear();
         twinCheck.clear();
     }
@@ -135,6 +140,7 @@ public class GolemKeeper
         if (event.getEntity() instanceof IronGolem golem && event.getLevel() instanceof ServerLevel level
               && golem.getPersistentData().getBoolean(GOLEM_TAG))
         {
+            golem.setPathfindingMalus(PathType.WATER, -1.0F);
             wentCold.remove(golem.getUUID());
             twinCheck.add(GlobalPos.of(level.dimension(), BlockPos.of(golem.getPersistentData().getLong(POST_TAG))));
         }
@@ -151,7 +157,7 @@ public class GolemKeeper
         {
             tickCounter = 0;
             final Set<ColonyId> live = rota.fill(event.getServer());
-            ColonyAutopilot.retainColonies(live, lastSpawn, guardians);
+            ColonyAutopilot.retainColonies(live, lastSpawn, guardians, deferredTold);
             final Set<UUID> onTheBooks = new HashSet<>();
             for (final Map<Long, UUID> posts : guardians.values())
             {
@@ -225,6 +231,11 @@ public class GolemKeeper
         {
             colonyGuardians.keySet().retainAll(livePosts);
         }
+        final Set<Long> colonyDeferred = deferredTold.get(key);
+        if (colonyDeferred != null)
+        {
+            colonyDeferred.retainAll(livePosts);
+        }
     }
 
     private static long sideKey(final BlockPos post, final int side)
@@ -243,6 +254,7 @@ public class GolemKeeper
         final long now = level.getGameTime();
         final long postKey = sideKey(post, side);
         final Map<Long, Long> colonySpawns = lastSpawn.computeIfAbsent(key, k -> new HashMap<>());
+        final Set<Long> colonyDeferred = deferredTold.computeIfAbsent(key, k -> new HashSet<>());
 
         final Map<Long, UUID> colonyGuardians = guardians.computeIfAbsent(key, k -> new HashMap<>());
         final UUID known = colonyGuardians.get(postKey);
@@ -267,7 +279,8 @@ public class GolemKeeper
 
             final GlobalPos cold = wentCold.get(known);
             if (cold != null && cold.dimension().equals(level.dimension())
-                  && !WorldUtil.isChunkLoaded(level, cold.pos().getX() >> 4, cold.pos().getZ() >> 4))
+                  && (!WorldUtil.isChunkLoaded(level, cold.pos().getX() >> 4, cold.pos().getZ() >> 4)
+                        || !level.areEntitiesLoaded(ChunkPos.asLong(cold.pos()))))
             {
                 return;
             }
@@ -275,13 +288,11 @@ public class GolemKeeper
             wentCold.remove(known);
         }
 
-        final List<IronGolem> ours = level.getEntitiesOfClass(IronGolem.class,
-          new AABB(post).inflate(ADOPTION_SCAN, 48, ADOPTION_SCAN),
-          golem -> golem.isAlive() && golem.getPersistentData().getBoolean(GOLEM_TAG)
-                     && golem.getPersistentData().getLong(POST_TAG) == postKey);
+        final List<IronGolem> ours = stamped(level, post, postKey);
         if (!ours.isEmpty())
         {
             colonyGuardians.put(postKey, ours.get(0).getUUID());
+            colonyDeferred.remove(postKey);
             restoreLeash(ours.get(0), post);
             for (final IronGolem extra : ours.subList(1, ours.size()))
             {
@@ -302,11 +313,31 @@ public class GolemKeeper
             return;
         }
 
+        final Long twinFell = isTownHall ? grounds.golemFall(sideKey(post, 1 - side)) : null;
+        if (twinFell != null && now >= twinFell && now - twinFell < REFORGE_AFTER_FALL_TICKS)
+        {
+            return;
+        }
+
+        for (int cx = (post.getX() - ADOPTION_SCAN) >> 4; cx <= (post.getX() + ADOPTION_SCAN) >> 4; cx++)
+        {
+            for (int cz = (post.getZ() - ADOPTION_SCAN) >> 4; cz <= (post.getZ() + ADOPTION_SCAN) >> 4; cz++)
+            {
+                if (level.getChunkSource().hasChunk(cx, cz) && !level.areEntitiesLoaded(ChunkPos.asLong(cx, cz)))
+                {
+                    return;
+                }
+            }
+        }
+
         Direction avoid = null;
         if (isTownHall)
         {
+
             final UUID twin = colonyGuardians.get(sideKey(post, 1 - side));
-            if (twin != null && level.getEntity(twin) instanceof IronGolem living && living.isAlive())
+            final IronGolem living = twin != null && level.getEntity(twin) instanceof IronGolem booked && booked.isAlive() ? booked
+                                       : stamped(level, post, sideKey(post, 1 - side)).stream().findFirst().orElse(null);
+            if (living != null)
             {
                 final CompoundTag twinData = living.getPersistentData();
                 final BlockPos twinAt = twinData.contains(HOME_TAG) ? BlockPos.of(twinData.getLong(HOME_TAG)) : living.blockPosition();
@@ -321,8 +352,11 @@ public class GolemKeeper
         if (stand == null)
         {
 
-            ColonyAutopilot.LOGGER.debug("[{}] no dry standing spot outside the {} yet — golem deferred",
-              colony.getName(), isTownHall ? "town hall" : "blacksmith");
+            if (colonyDeferred.add(postKey))
+            {
+                ColonyAutopilot.LOGGER.debug("[{}] no dry standing spot outside the {} yet — golem deferred",
+                  colony.getName(), isTownHall ? "town hall" : "blacksmith");
+            }
             return;
         }
         final IronGolem golem = EntityType.IRON_GOLEM.create(level);
@@ -347,6 +381,7 @@ public class GolemKeeper
         level.addFreshEntity(golem);
         colonySpawns.put(postKey, now);
         colonyGuardians.put(postKey, golem.getUUID());
+        colonyDeferred.remove(postKey);
         grounds.clearGolemFall(postKey);
 
         if (last == null)
@@ -360,6 +395,12 @@ public class GolemKeeper
             ColonyAutopilot.LOGGER.debug("[{}] reforged the fallen {} golem at {}",
               colony.getName(), isTownHall ? "town hall" : "blacksmith", post.toShortString());
         }
+    }
+
+    private static List<IronGolem> stamped(final ServerLevel level, final BlockPos post, final long postKey)
+    {
+        return level.getEntitiesOfClass(IronGolem.class, new AABB(post).inflate(ADOPTION_SCAN, 48, ADOPTION_SCAN),
+          golem -> golem.isAlive() && golem.getPersistentData().getBoolean(GOLEM_TAG) && golem.getPersistentData().getLong(POST_TAG) == postKey);
     }
 
     private static void restoreLeash(final IronGolem golem, final BlockPos post)
@@ -407,6 +448,7 @@ public class GolemKeeper
         }
         lastSpawn.keySet().retainAll(kept);
         guardians.keySet().retainAll(kept);
+        deferredTold.keySet().retainAll(kept);
         final Set<UUID> onTheBooks = new HashSet<>();
         for (final Map<Long, UUID> posts : guardians.values())
         {
@@ -449,12 +491,31 @@ public class GolemKeeper
         }
         final ColonyId key = ColonyAutopilot.colonyKey(colony);
         instance.lastSpawn.remove(key);
+        instance.deferredTold.remove(key);
         final Map<Long, UUID> gone = instance.guardians.remove(key);
         if (gone != null)
         {
             instance.wentCold.keySet().removeAll(gone.values());
         }
         return removed;
+    }
+
+    static List<IronGolem> guardians(final IColony colony)
+    {
+        final Map<Long, UUID> posts = instance == null ? null : instance.guardians.get(ColonyAutopilot.colonyKey(colony));
+        if (posts == null || !(colony.getWorld() instanceof ServerLevel level))
+        {
+            return List.of();
+        }
+        final List<IronGolem> living = new ArrayList<>();
+        for (final UUID id : posts.values())
+        {
+            if (level.getEntity(id) instanceof IronGolem golem && golem.isAlive())
+            {
+                living.add(golem);
+            }
+        }
+        return living;
     }
 
     private static BlockPos spawnSpotOutside(final ServerLevel level, final IBuilding building,
@@ -513,19 +574,12 @@ public class GolemKeeper
             final BlockPos feet = new BlockPos(x, y, z);
             final var floor = level.getBlockState(feet.below());
             final boolean solidDryFloor = !floor.getCollisionShape(level, feet.below()).isEmpty()
-                  && floor.getFluidState().isEmpty() && !floor.is(Blocks.MAGMA_BLOCK) && !floor.is(Blocks.CAMPFIRE)
-                  && !floor.is(BlockTags.LOGS) && !floor.is(BlockTags.LEAVES);
-            if (solidDryFloor && bodyRoom(level, feet) && bodyRoom(level, feet.above()) && bodyRoom(level, feet.above(2)))
+                  && floor.getFluidState().isEmpty() && !WaterRescue.harmfulFloor(floor);
+            if (solidDryFloor && WaterRescue.clear(level, feet) && WaterRescue.clear(level, feet.above()) && WaterRescue.clear(level, feet.above(2)))
             {
                 return feet;
             }
         }
         return null;
-    }
-
-    private static boolean bodyRoom(final ServerLevel level, final BlockPos cell)
-    {
-        final var state = level.getBlockState(cell);
-        return state.getCollisionShape(level, cell).isEmpty() && state.getFluidState().isEmpty();
     }
 }

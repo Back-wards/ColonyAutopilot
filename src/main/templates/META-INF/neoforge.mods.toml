@@ -17,12 +17,10 @@ credits="Made by Backwards"
 authors="Backwards"
 
 description='''
-The colony runs itself: an autopilot for MineColonies that plans the whole
-build order, places and upgrades every hut, hires, feeds, equips and
-researches on its own, keeps roads, lamps, fields and stock repaired, and
-defends the village through the Fungal Infection: Spore apocalypse (creep
-scrubbing, reactive defense, the scheduled RedNight). Every behavior has a
-config key - autonomy is the default, never a mandate.
+Place a Town Hall and the colony runs itself.
+It places, builds and upgrades its huts, lays roads and levels its plots.
+It supplies, staffs, researches, repairs and defends itself.
+In Progression Mode, on by default, it pays its way in ColonyBucks.
 '''
 
 [[mixins]]

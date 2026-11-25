@@ -119,16 +119,21 @@ public final class AutopilotWindow extends AbstractWindowSkeleton
                 button.setEnabled(!name.equals(section));
             }
         });
+
+        settingsList = findPaneOfTypeByID("keys", ScrollingList.class);
         registerButton("section", button -> {
             final int index = sectionList.getListElementIndexByPane(button);
             if (index >= 0 && index < sections.size())
             {
                 section = sections.get(index);
+
+                settingsList.setScrollY(0);
+
+                Pane.clearFocus();
                 rebuildShown();
             }
         });
 
-        settingsList = findPaneOfTypeByID("keys", ScrollingList.class);
         settingsList.setDataProvider(new ScrollingList.DataProvider()
         {
             @Override
@@ -164,6 +169,11 @@ public final class AutopilotWindow extends AbstractWindowSkeleton
             if (row != null)
             {
                 send(row, "", true);
+
+                if (Pane.getFocus() == button.getParent().findPaneByID("field"))
+                {
+                    Pane.clearFocus();
+                }
             }
         });
 
@@ -184,7 +194,8 @@ public final class AutopilotWindow extends AbstractWindowSkeleton
         if ((key == 257 || key == 335) && Pane.getFocus() instanceof TextField field && "field".equals(field.getID()))
         {
             final int index = settingsList.getListElementIndexByPane(field);
-            if (index >= 0 && index < shown.size())
+
+            if (index >= 0 && index < shown.size() && shown.get(index).editable() && !shown.get(index).type().equals("boolean"))
             {
                 send(shown.get(index), field.getText().trim(), false);
                 Pane.clearFocus();

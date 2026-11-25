@@ -83,6 +83,12 @@ final class GrowthPlanLoader
                       file.getFileName());
                 }
                 ColonyAutopilot.LOGGER.info("Growth plan loaded: {} steps from {}", plan.size(), file.getFileName());
+
+                if (!plan.isEmpty() && plan.stream().noneMatch(step -> step.hut() == ModBlocks.blockHutStable))
+                {
+                    ColonyAutopilot.LOGGER.info("Growth plan {} has no Stable step — cavalry is built only where the plan asks: add a \"minecolonies:blockhutstable\" entry, or delete the file and the current plan is written in its place",
+                      file.getFileName());
+                }
                 return plan;
             }
         }
@@ -150,6 +156,8 @@ final class GrowthPlanLoader
 
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutBarracks, "Barracks", 10, 1),
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutComposter, "Composter's Hut", 11, 1),
+
+          new GrowthDirector.ResolvedStep(ModBlocks.blockHutStable, "Stable", 11, 1),
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutLibrary, "Library", 11, 1),
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutHome, "Residence", 12, 7),
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutHospital, "Hospital", 12, 1),
@@ -158,7 +166,6 @@ final class GrowthPlanLoader
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutDeliveryman, "Courier's Hut", 12, 2),
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutGuardTower, "Guard Tower", 12, 3),
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutHome, "Residence", 13, 8),
-
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutShepherd, "Shepherd's Hut", 13, 1),
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutCowboy, "Cowhand's Hut", 13, 1),
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutChickenHerder, "Chicken Farmer's Hut", 13, 1),
@@ -195,7 +202,7 @@ final class GrowthPlanLoader
 
           new GrowthDirector.ResolvedStep(ModBlocks.blockHutPlantation, "Plantation", 22, 2)));
 
-        return AutopilotConfig.live(AutopilotConfig.NO_GRAVES) ? steps : withGraveyard(steps);
+        return AutopilotConfig.NO_GRAVES.get() ? steps : withGraveyard(steps);
     }
 
     static List<GrowthDirector.ResolvedStep> withGraveyard(final List<GrowthDirector.ResolvedStep> plan)

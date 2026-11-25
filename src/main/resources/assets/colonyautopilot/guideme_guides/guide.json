@@ -2,8 +2,8 @@
   "item_settings": {
     "display_name": {"text": "Colony Autopilot Field Guide", "italic": false},
     "tooltip_lines": [
-      {"text": "The colony, the infection, and how to survive both", "color": "gray", "italic": false},
-      {"text": "Sneak-right-click onto an Akashic Tome to bind it", "color": "dark_gray", "italic": true}
+      {"text": "The colony that runs itself, and the plague where installed", "color": "gray", "italic": false},
+      {"text": "With Akashic Tome: craft it together with the tome to bind it", "color": "dark_gray", "italic": true}
     ]
   }
 }

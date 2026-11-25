@@ -10,6 +10,7 @@ import net.neoforged.neoforge.common.ModConfigSpec;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -22,7 +23,8 @@ public final class ColonySettings
         COLONY, SERVER
     }
 
-    public record Key(String path, String section, String name, Class<?> type, Object def, Object min, Object max, Scope scope, String comment, Set<String> requires)
+    public record Key(String path, String section, String name, Class<?> type, Object def, Object min, Object max, Scope scope, String comment, Set<String> requires,
+      ModConfigSpec.ConfigValue<?> value)
     {
 
         public boolean available()
@@ -40,11 +42,10 @@ public final class ColonySettings
 
     private static final Map<String, Set<String>> REQUIRES = Map.of(
       "guns.enchantments", Set.of("tacz"),
-      "guns.fullAutoGunners", Set.of("tacz", "minecolonies_compatibility"),
-      "guns.gunnerGuards", Set.of("tacz", "minecolonies_compatibility"),
       "spores.turretsTargetInfected", Set.of(SporeCompat.MOD_ID, "k_turrets"),
       "spores.turretsInvulnerable", Set.of(SporeCompat.MOD_ID, "k_turrets"),
-      "tweaks.muteFarmersDelightRecipeErrors", Set.of("sporeinquisition"));
+      "tweaks.muteFarmersDelightRecipeErrors", Set.of("sporeinquisition"),
+      "tweaks.spawnChunkRadius", Set.of("sporeinquisition"));
 
     private static Set<String> requiresOf(final String path)
     {
@@ -65,7 +66,7 @@ public final class ColonySettings
       "tweaks.workersWorkInRain", "tweaks.disableVanillaPatrols", "tweaks.disableFireTick", "tweaks.disableMobGriefing",
       "tweaks.spawnChunkRadius", "tweaks.hostileSpawnCap", "tweaks.potionDurationMultiplier", "tweaks.ignoreToolTier", "tweaks.ignoreFoodQuality",
       "tweaks.spawnStarterKit", "tweaks.muteFarmersDelightRecipeErrors", "tweaks.workBudgetPerTick",
-      "guns.enchantments", "guns.fullAutoGunners", "spores.gracePeriodDays", "spores.turretsTargetInfected", "spores.turretsInvulnerable",
+      "guns.enchantments", "spores.gracePeriodDays", "spores.turretsTargetInfected", "spores.turretsInvulnerable",
       "arrivals.bornInChaosDay", "arrivals.mutantsDay", "arrivals.advancedMutantsDay", "arrivals.eliteMutantsDay",
       "arrivals.bossMutantsDay", "arrivals.hookLimit", "arrivals.hookCrowdLimit",
 
@@ -80,6 +81,8 @@ public final class ColonySettings
 
     private static volatile List<Key> keys;
     private static volatile Map<String, Key> byPath;
+
+    private static volatile Map<ModConfigSpec.ConfigValue<?>, Key> byValue;
 
     private static final Map<ColonyId, Map<String, Object>> cache = new HashMap<>();
 
@@ -105,12 +108,16 @@ public final class ColonySettings
         return byPath.get(path);
     }
 
-    public static Key key(final String path)
+    public static Key key(final ModConfigSpec.ConfigValue<?> value)
     {
-        final Key key = find(path);
+        if (byValue == null)
+        {
+            build();
+        }
+        final Key key = byValue.get(value);
         if (key == null)
         {
-            throw new IllegalArgumentException("no config key " + path);
+            throw new IllegalArgumentException("no config key " + AutopilotConfig.pathOf(value));
         }
         return key;
     }
@@ -124,16 +131,19 @@ public final class ColonySettings
         final List<Key> list = new ArrayList<>();
         walk("", AutopilotConfig.SPEC.getSpec(), list);
         final Map<String, Key> map = new HashMap<>();
+        final Map<ModConfigSpec.ConfigValue<?>, Key> values = new IdentityHashMap<>();
         final List<Key> listed = new ArrayList<>();
         for (final Key key : list)
         {
             map.put(key.path(), key);
+            values.put(key.value(), key);
             if (key.available())
             {
                 listed.add(key);
             }
         }
         byPath = map;
+        byValue = values;
         keys = List.copyOf(listed);
     }
 
@@ -157,7 +167,8 @@ public final class ColonySettings
                 final ModConfigSpec.Range<?> range = value.getRange();
                 out.add(new Key(path, prefix, entry.getKey(), def.getClass(), def,
                   range == null ? null : range.getMin(), range == null ? null : range.getMax(),
-                  SERVER_ONLY.contains(path) ? Scope.SERVER : Scope.COLONY, value.getComment() == null ? "" : value.getComment(), requiresOf(path)));
+                  SERVER_ONLY.contains(path) ? Scope.SERVER : Scope.COLONY, value.getComment() == null ? "" : value.getComment(), requiresOf(path),
+                  AutopilotConfig.SPEC.getValues().get(path)));
             }
         }
     }
@@ -197,7 +208,7 @@ public final class ColonySettings
         {
             return Boolean.TRUE;
         }
-        return ((ModConfigSpec.ConfigValue<?>) AutopilotConfig.SPEC.getValues().get(key.path())).get();
+        return key.value().get();
     }
 
     private static Map<String, Object> parseOverrides(final IColony colony)

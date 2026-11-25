@@ -2,15 +2,11 @@
 package com.backwards.colonyautopilot.client;
 
 import com.backwards.colonyautopilot.net.SettingsPayloads.SettingsSnapshot;
-import com.minecolonies.api.items.component.ColonyId;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.function.Consumer;
 
 public final class ClientSettingsCache
 {
-    private static final Map<ColonyId, SettingsSnapshot> latest = new HashMap<>();
 
     private static Consumer<SettingsSnapshot> presenter = snapshot -> {};
 
@@ -20,13 +16,7 @@ public final class ClientSettingsCache
 
     public static void onSnapshot(final SettingsSnapshot snapshot)
     {
-        latest.put(snapshot.colony(), snapshot);
         presenter.accept(snapshot);
-    }
-
-    public static SettingsSnapshot latest(final ColonyId colony)
-    {
-        return latest.get(colony);
     }
 
     public static void present(final Consumer<SettingsSnapshot> viewer)
@@ -44,7 +34,6 @@ public final class ClientSettingsCache
 
     public static void clear()
     {
-        latest.clear();
         presenter = snapshot -> {};
     }
 }

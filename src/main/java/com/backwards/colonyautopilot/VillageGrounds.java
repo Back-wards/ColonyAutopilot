@@ -16,9 +16,11 @@ import net.minecraft.tags.BlockTags;
 import net.minecraft.util.Tuple;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.FallingBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -48,6 +50,8 @@ final class VillageGrounds
 
         final List<SiteSelector.Footprint> shields = new ArrayList<>(obstacles);
         shields.add(plot);
+
+        final Set<Long> refusedTrunks = new HashSet<>();
         int cleared = 0;
         int graded = 0;
         int recapped = 0;
@@ -90,13 +94,13 @@ final class VillageGrounds
                     if (ring > SKIRT_RINGS)
                     {
 
-                        if (!insideAny(obstacles, x, z) && !floatingAbove(level, x, z, plotGroundY) && fellTreeAt(level, x, z, shields))
+                        if (!SiteSelector.insideAny(obstacles, x, z) && !floatingAbove(level, x, z, plotGroundY) && fellTreeAt(level, x, z, shields, refusedTrunks))
                         {
                             cleared++;
                         }
                         continue;
                     }
-                    final int[] done = smoothSkirtColumn(level, x, z, plotGroundY, ring, obstacles, shields);
+                    final int[] done = smoothSkirtColumn(level, x, z, plotGroundY, ring, obstacles, shields, refusedTrunks);
                     cleared += done[0];
                     graded += done[1];
                     recapped += done[2];
@@ -125,20 +129,13 @@ final class VillageGrounds
         return surfaceY > plotGroundY + 12 && !SiteSelector.solidBeneath(level, x, z, surfaceY, new BlockPos.MutableBlockPos());
     }
 
-    private static boolean insideAny(final List<SiteSelector.Footprint> boxes, final int x, final int z)
+    static boolean fellTreeAt(final ServerLevel level, final int x, final int z, final List<SiteSelector.Footprint> shields,
+      final Set<Long> refusedTrunks)
     {
-        for (final SiteSelector.Footprint box : boxes)
+        if (refusedTrunks.contains(BlockPos.asLong(x, 0, z)))
         {
-            if (box.intersects(x, z, x, z))
-            {
-                return true;
-            }
+            return false;
         }
-        return false;
-    }
-
-    static boolean fellTreeAt(final ServerLevel level, final int x, final int z, final List<SiteSelector.Footprint> shields)
-    {
 
         final int ground = SiteSelector.groundHeight(level, x, z) - 1;
         for (int y = ground + 1; y <= ground + 12; y++)
@@ -146,7 +143,16 @@ final class VillageGrounds
             final BlockPos log = new BlockPos(x, y, z);
             if (level.getBlockState(log).is(BlockTags.LOGS))
             {
-                return rooted(level, log.below()) && VillagePaths.fellTree(level, log, shields, true);
+                if (!rooted(level, log.below()))
+                {
+                    return false;
+                }
+                if (VillagePaths.fellTree(level, log, shields, true))
+                {
+                    return true;
+                }
+                VillagePaths.refuseTrunk(refusedTrunks, log);
+                return false;
             }
         }
         return false;
@@ -212,7 +218,7 @@ final class VillageGrounds
                             cold++;
                             break;
                         }
-                        if (insideAny(obstacles, fx, fz) || roadBand.contains(BlockPos.asLong(fx, 0, fz)))
+                        if (SiteSelector.insideAny(obstacles, fx, fz) || roadBand.contains(BlockPos.asLong(fx, 0, fz)))
                         {
                             break;
                         }
@@ -260,7 +266,7 @@ final class VillageGrounds
         {
             return grade;
         }
-        if (!WorldUtil.isChunkLoaded(level, x >> 4, z >> 4) || insideAny(obstacles, x, z) || roadBand.contains(BlockPos.asLong(x, 0, z)))
+        if (!WorldUtil.isChunkLoaded(level, x >> 4, z >> 4) || SiteSelector.insideAny(obstacles, x, z) || roadBand.contains(BlockPos.asLong(x, 0, z)))
         {
             return edgeLine;
         }
@@ -271,12 +277,9 @@ final class VillageGrounds
 
     private static boolean rampable(final ServerLevel level, final int x, final int surfaceY, final int z, final List<SiteSelector.Footprint> obstacles)
     {
-        for (final SiteSelector.Footprint box : obstacles)
+        if (SiteSelector.insideAny(obstacles, x, z))
         {
-            if (box.intersects(x, z, x, z))
-            {
-                return false;
-            }
+            return false;
         }
         final BlockState surface = level.getBlockState(new BlockPos(x, surfaceY, z));
         if (!isEarth(surface.getBlock()) && !surface.is(BlockTags.BASE_STONE_OVERWORLD) && !surface.is(Blocks.GRAVEL))
@@ -317,9 +320,9 @@ final class VillageGrounds
     }
 
     private static int[] smoothSkirtColumn(final ServerLevel level, final int x, final int z, final int grade,
-      final int ring, final List<SiteSelector.Footprint> obstacles, final List<SiteSelector.Footprint> shields)
+      final int ring, final List<SiteSelector.Footprint> obstacles, final List<SiteSelector.Footprint> shields, final Set<Long> refusedTrunks)
     {
-        if (insideAny(obstacles, x, z) || floatingAbove(level, x, z, grade))
+        if (SiteSelector.insideAny(obstacles, x, z) || floatingAbove(level, x, z, grade))
         {
             return new int[] {0, 0, 0};
         }
@@ -337,7 +340,7 @@ final class VillageGrounds
             cleared++;
         }
 
-        if (fellTreeAt(level, x, z, shields))
+        if (fellTreeAt(level, x, z, shields, refusedTrunks))
         {
             cleared++;
         }
@@ -397,7 +400,7 @@ final class VillageGrounds
         {
             final int nx = x + step[0];
             final int nz = z + step[1];
-            if (!WorldUtil.isChunkLoaded(level, nx >> 4, nz >> 4) || insideAny(shields, nx, nz))
+            if (!WorldUtil.isChunkLoaded(level, nx >> 4, nz >> 4) || SiteSelector.insideAny(shields, nx, nz))
             {
                 continue;
             }
@@ -410,9 +413,225 @@ final class VillageGrounds
         return top;
     }
 
+    private static void notchBank(final ServerLevel level, final Sweep sweep, final int x, final int z, final List<SiteSelector.Footprint> shields)
+    {
+
+        if (sweep.roadBand.contains(BlockPos.asLong(x, 0, z)))
+        {
+            return;
+        }
+        final int top = SiteSelector.groundHeight(level, x, z) - 1;
+        if (!isEarth(level.getBlockState(new BlockPos(x, top, z)).getBlock()) || floatingAbove(level, x, z, sweep.villageTop))
+        {
+            return;
+        }
+
+        int waterTop = Integer.MIN_VALUE;
+        int[] toWater = null;
+        for (final int[] step : NEIGHBORS)
+        {
+            final int nx = x + step[0];
+            final int nz = z + step[1];
+            if (!WorldUtil.isChunkLoaded(level, nx >> 4, nz >> 4))
+            {
+                return;
+            }
+
+            if (SiteSelector.insideAny(shields, nx, nz))
+            {
+                continue;
+            }
+            final int water = openWaterTopAt(level, nx, nz);
+            if (water > waterTop)
+            {
+                waterTop = water;
+                toWater = step;
+            }
+        }
+        if (toWater == null || top - waterTop < 1 || top - waterTop > NOTCH_MAX_RISE)
+        {
+            return;
+        }
+
+        toWater = null;
+        for (final int[] step : NEIGHBORS)
+        {
+            if (SiteSelector.insideAny(shields, x + step[0], z + step[1]) || openWaterTopAt(level, x + step[0], z + step[1]) != waterTop)
+            {
+                continue;
+            }
+            final Boolean wayOut = wayOutNear(level, x, z, x + step[0], z + step[1], waterTop);
+            if (wayOut == null)
+            {
+                return;
+            }
+            if (!wayOut)
+            {
+                toWater = step;
+                break;
+            }
+        }
+        if (toWater == null)
+        {
+            return;
+        }
+
+        final List<int[]> stair = new ArrayList<>();
+        for (int k = 0; ; k++)
+        {
+            if (k > NOTCH_MAX_RISE)
+            {
+                return;
+            }
+            final int cx = x - toWater[0] * k;
+            final int cz = z - toWater[1] * k;
+            final int line = waterTop + k;
+            int columnTop = top;
+            if (k > 0)
+            {
+                if (!WorldUtil.isChunkLoaded(level, cx >> 4, cz >> 4))
+                {
+                    return;
+                }
+                columnTop = SiteSelector.groundHeight(level, cx, cz) - 1;
+
+                if (!groundVote(level.getBlockState(new BlockPos(cx, Math.min(columnTop, line), cz))))
+                {
+                    return;
+                }
+                if (columnTop <= line)
+                {
+                    break;
+                }
+                if (cx < sweep.minX || cx >= sweep.minX + sweep.width || cz < sweep.minZ || cz >= sweep.minZ + sweep.depth
+                      || SiteSelector.insideAny(shields, cx, cz) || sweep.roadBand.contains(BlockPos.asLong(cx, 0, cz))
+                      || ColonyGrounds.get(level).isCausewayColumn(sweep.colony.getID(), BlockPos.asLong(cx, 0, cz)))
+                {
+                    return;
+                }
+            }
+            if (!cuttable(level, cx, cz, columnTop, line))
+            {
+                return;
+            }
+            stair.add(new int[] {cx, cz, columnTop, line});
+        }
+        int cut = 0;
+        for (final int[] column : stair)
+        {
+            final boolean wasGrass = level.getBlockState(new BlockPos(column[0], column[2], column[1])).is(Blocks.GRASS_BLOCK);
+            for (int y = column[2]; y > column[3]; y--)
+            {
+                WorldUtil.setBlockState(level, new BlockPos(column[0], y, column[1]), Blocks.AIR.defaultBlockState());
+                cut++;
+            }
+            recap(level, column[0], column[1], wasGrass);
+        }
+        TickBudget.spend(cut);
+        final String notch = new BlockPos(x, waterTop, z).toShortString();
+        sweep.notches.add(notch);
+        ColonyAutopilot.LOGGER.debug("[{}] cut a way out of the water at {} — its bank stood {} over it, with none within {} blocks ({} block(s) taken down)",
+          sweep.colony.getName(), notch, top - waterTop, NOTCH_REACH, cut);
+    }
+
+    private static boolean cuttable(final ServerLevel level, final int x, final int z, final int top, final int line)
+    {
+        if (top - line > MAX_EDIT_PER_COLUMN)
+        {
+            return false;
+        }
+        for (int y = top + 1; y <= top + 12; y++)
+        {
+            final BlockPos over = new BlockPos(x, y, z);
+
+            if (level.getBlockState(over).is(BlockTags.LOGS) || (y <= line + 2 && !WaterRescue.clear(level, over)))
+            {
+                return false;
+            }
+        }
+        final BlockState floor = level.getBlockState(new BlockPos(x, line, z));
+        if ((!isEarth(floor.getBlock()) && !floor.is(BlockTags.BASE_STONE_OVERWORLD) && !floor.is(Blocks.GRAVEL))
+              || (floor.getBlock() instanceof FallingBlock && FallingBlock.isFree(level.getBlockState(new BlockPos(x, line - 1, z)))))
+        {
+            return false;
+        }
+        for (int y = top; y > line; y--)
+        {
+            final BlockPos pos = new BlockPos(x, y, z);
+            if (!isEarth(level.getBlockState(pos).getBlock()) || VillagePaths.holdsFluid(level, pos))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static Boolean wayOutNear(final ServerLevel level, final int bx, final int bz, final int wx, final int wz, final int waterTop)
+    {
+        final Set<Long> seen = new HashSet<>();
+        final ArrayDeque<int[]> open = new ArrayDeque<>();
+        seen.add(BlockPos.asLong(wx, 0, wz));
+        open.add(new int[] {wx, wz});
+        int read = 0;
+        try
+        {
+            while (!open.isEmpty())
+            {
+                final int[] at = open.poll();
+                for (final int[] step : NEIGHBORS)
+                {
+                    final int nx = at[0] + step[0];
+                    final int nz = at[1] + step[1];
+                    if (Math.abs(nx - bx) > NOTCH_REACH || Math.abs(nz - bz) > NOTCH_REACH || (nx == bx && nz == bz)
+                          || !seen.add(BlockPos.asLong(nx, 0, nz)))
+                    {
+                        continue;
+                    }
+                    if (!WorldUtil.isChunkLoaded(level, nx >> 4, nz >> 4))
+                    {
+                        return null;
+                    }
+                    read += 2;
+                    final BlockPos over = new BlockPos(nx, waterTop + 1, nz);
+                    if (openWaterTopAt(level, nx, nz) == waterTop && level.getBlockState(over).getCollisionShape(level, over).isEmpty())
+                    {
+                        open.add(new int[] {nx, nz});
+                        continue;
+                    }
+                    read += 3;
+                    if (WaterRescue.climbableBank(level, new BlockPos(nx, waterTop, nz)))
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        finally
+        {
+            TickBudget.spend(read);
+        }
+    }
+
+    private static int openWaterTopAt(final ServerLevel level, final int x, final int z)
+    {
+        final int y = SiteSelector.groundHeight(level, x, z) - 1;
+        return WaterRescue.openWater(level.getBlockState(new BlockPos(x, y, z))) ? y : Integer.MIN_VALUE;
+    }
+
+    private static boolean groundVote(final BlockState state)
+    {
+        return state.getFluidState().isEmpty()
+                 && (isEarth(state.getBlock()) || state.is(Blocks.DIRT_PATH) || state.is(Blocks.GRAVEL) || state.is(Blocks.FARMLAND));
+    }
+
     private static final int COLUMNS_PER_TICK = 32;
 
     private static final int MAX_EDIT_PER_COLUMN = 4;
+
+    private static final int NOTCH_REACH = 4;
+
+    private static final int NOTCH_MAX_RISE = 3;
 
     private static final int MARGIN = 8;
 
@@ -435,8 +654,12 @@ final class VillageGrounds
 
         private final Set<Long> refusedTrunks = new HashSet<>();
 
+        private final Set<Long> roadBand;
+
+        private final List<String> notches = new ArrayList<>();
+
         private Sweep(final IColony colony, final int minX, final int minZ, final int width, final int depth,
-          final List<SiteSelector.Footprint> keepOut, final List<BlockPos> groves, final int villageTop)
+          final List<SiteSelector.Footprint> keepOut, final List<BlockPos> groves, final int villageTop, final Set<Long> roadBand)
         {
             this.colony = colony;
             this.minX = minX;
@@ -446,6 +669,7 @@ final class VillageGrounds
             this.keepOut = keepOut;
             this.groves = groves;
             this.villageTop = villageTop;
+            this.roadBand = roadBand;
         }
     }
 
@@ -453,7 +677,7 @@ final class VillageGrounds
     {
     }
 
-    static Sweep plan(final IColony colony, final List<SiteSelector.Footprint> reserved)
+    static Sweep plan(final IColony colony, final List<SiteSelector.Footprint> reserved, final Set<Long> roadBand)
     {
         int minX = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
         final List<SiteSelector.Footprint> keepOut = new ArrayList<>(reserved);
@@ -523,7 +747,17 @@ final class VillageGrounds
 
         final int width = maxX - minX + 1;
         final int depth = maxZ - minZ + 1;
-        return new Sweep(colony, minX, minZ, width, depth, keepOut, groves, villageTop);
+        return new Sweep(colony, minX, minZ, width, depth, keepOut, groves, villageTop, roadBand);
+    }
+
+    static void reportNotches(final Sweep sweep)
+    {
+        if (!sweep.notches.isEmpty())
+        {
+            ColonyAutopilot.LOGGER.info("[{}] the village grounds sweep cut {} way(s) out of the water, where its banks stood over it with none within {} blocks: at {}",
+              sweep.colony.getName(), sweep.notches.size(), NOTCH_REACH, String.join("; ", sweep.notches));
+            sweep.notches.clear();
+        }
     }
 
     static boolean drain(final Sweep sweep)
@@ -555,13 +789,14 @@ final class VillageGrounds
                     ColonyAutopilot.LOGGER.debug("[{}] the village grounds were tended — {} blocks smoothed toward the local grade{}",
                       sweep.colony.getName(), sweep.smoothed, sweep.felled > 0 ? ", " + sweep.felled + " stray trees felled" : "");
                 }
+                reportNotches(sweep);
                 return true;
             }
             final int x = sweep.minX + sweep.cursor % sweep.width;
             final int z = sweep.minZ + sweep.cursor / sweep.width;
             sweep.cursor++;
 
-            if (insideAny(fellShields, x, z) || !WorldUtil.isChunkLoaded(level, x >> 4, z >> 4))
+            if (SiteSelector.insideAny(fellShields, x, z) || !WorldUtil.isChunkLoaded(level, x >> 4, z >> 4))
             {
                 continue;
             }
@@ -574,8 +809,8 @@ final class VillageGrounds
                     break;
                 }
             }
-            final int result = smoothColumn(level, x, z, fellAllowed, fellShields, sweep.villageTop,
-              ColonyGrounds.get(level).isCausewayColumn(sweep.colony.getID(), BlockPos.asLong(x, 0, z)), sweep.refusedTrunks);
+            final boolean causeway = ColonyGrounds.get(level).isCausewayColumn(sweep.colony.getID(), BlockPos.asLong(x, 0, z));
+            final int result = smoothColumn(level, x, z, fellAllowed, fellShields, sweep.villageTop, causeway, sweep.refusedTrunks);
             if (result == -1)
             {
                 sweep.felled++;
@@ -591,6 +826,11 @@ final class VillageGrounds
                 continue;
             }
             sweep.smoothed += result;
+
+            if (!causeway)
+            {
+                notchBank(level, sweep, x, z, fellShields);
+            }
         }
         return false;
     }
@@ -679,9 +919,7 @@ final class VillageGrounds
                 fluidTop = Math.max(fluidTop, neighborY);
                 continue;
             }
-            if (!isEarth(neighborSurface.getBlock())
-                  && !neighborSurface.is(Blocks.DIRT_PATH) && !neighborSurface.is(Blocks.GRAVEL)
-                  && !neighborSurface.is(Blocks.FARMLAND))
+            if (!groundVote(neighborSurface))
             {
                 continue;
             }

@@ -2,6 +2,7 @@
 package com.backwards.colonyautopilot;
 
 import com.minecolonies.api.colony.IColony;
+import com.minecolonies.api.colony.IColonyManager;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
@@ -60,12 +61,32 @@ public final class ProtectedZones extends SavedData
         return byColony.getOrDefault(colonyId, List.of());
     }
 
+    private volatile java.util.Set<Integer> switchedOff = java.util.Set.of();
+
+    void noteSwitchedOff(final ServerLevel level)
+    {
+        final java.util.Set<Integer> off = new java.util.HashSet<>();
+        for (final Integer colonyId : byColony.keySet())
+        {
+            final IColony colony = IColonyManager.getInstance().getColonyByWorld(colonyId, level);
+            if (colony != null && !AutopilotConfig.get(colony, AutopilotConfig.ZONES_ENABLED))
+            {
+                off.add(colonyId);
+            }
+        }
+        switchedOff = java.util.Set.copyOf(off);
+    }
+
     List<SiteSelector.Footprint> allBoxes()
     {
+        final java.util.Set<Integer> off = switchedOff;
         final List<SiteSelector.Footprint> all = new ArrayList<>();
-        for (final List<SiteSelector.Footprint> boxes : byColony.values())
+        for (final Map.Entry<Integer, List<SiteSelector.Footprint>> zones : byColony.entrySet())
         {
-            all.addAll(boxes);
+            if (!off.contains(zones.getKey()))
+            {
+                all.addAll(zones.getValue());
+            }
         }
         return all;
     }

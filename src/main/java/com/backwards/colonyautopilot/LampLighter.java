@@ -139,16 +139,7 @@ public class LampLighter
                 if (base != null)
                 {
 
-                    boolean zoned = false;
-                    for (final SiteSelector.Footprint other : boxes)
-                    {
-                        if (other.intersects(x, z, x, z))
-                        {
-                            zoned = true;
-                            break;
-                        }
-                    }
-                    if (zoned)
+                    if (SiteSelector.insideAny(boxes, x, z))
                     {
                         continue;
                     }
@@ -270,7 +261,7 @@ public class LampLighter
         if (raised > 0 || removed > 0)
         {
             ColonyAutopilot.LOGGER.debug("[{}] the lamplighter raised {} and dismantled {} lamp post(s) around the {}",
-              colony.getName(), raised, removed, building.getBuildingDisplayName());
+              colony.getName(), raised, removed, SiteSelector.plainName(building));
         }
     }
 

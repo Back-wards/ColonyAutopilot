@@ -4,8 +4,10 @@ package com.backwards.colonyautopilot;
 import com.minecolonies.api.colony.buildings.IBuilding;
 import com.minecolonies.api.colony.buildings.modules.ISettingsModule;
 import com.minecolonies.api.colony.buildings.modules.settings.ISettingKey;
+import com.minecolonies.api.util.constant.BuildingConstants;
 import com.minecolonies.core.colony.buildings.AbstractBuilding;
 import com.minecolonies.core.colony.buildings.AbstractBuildingGuards;
+import com.minecolonies.core.colony.buildings.modules.ItemListModule;
 import com.minecolonies.core.colony.buildings.modules.settings.BoolSetting;
 import com.minecolonies.core.colony.buildings.modules.settings.IntSetting;
 import com.minecolonies.core.colony.buildings.modules.settings.StringSetting;
@@ -28,7 +30,12 @@ final class SettingsKeeper
         }
         force(building, BuildingLumberjack.DEFOLIATE, "break-leaves");
         force(building, BuildingLumberjack.REPLANT, "replant");
-        force(building, AbstractBuilding.BREEDING, "breeding");
+
+        if (building.getModules(ItemListModule.class).stream()
+              .noneMatch(flowers -> flowers.getId().equals(BuildingConstants.BUILDING_FLOWER_LIST) && flowers.getList().isEmpty()))
+        {
+            force(building, AbstractBuilding.BREEDING, "breeding");
+        }
         force(building, AbstractBuildingGuards.RETREAT, "retreat-when-hurt");
 
         if (!GrowthDirector.handHired(building))
@@ -42,7 +49,7 @@ final class SettingsKeeper
             builderMode.trigger();
             building.markDirty();
             ColonyAutopilot.LOGGER.info("[{}] switched the {} back to automatic work-order claiming",
-              building.getColony().getName(), building.getBuildingDisplayName());
+              building.getColony().getName(), SiteSelector.plainName(building));
         }
 
         final com.minecolonies.core.colony.buildings.modules.settings.BlockSetting fill =
@@ -53,7 +60,7 @@ final class SettingsKeeper
             fill.setValue(fill.getDefault());
             building.markDirty();
             ColonyAutopilot.LOGGER.info("[{}] reset the {}'s fill block to its default — it was a placeholder block",
-              building.getColony().getName(), building.getBuildingDisplayName());
+              building.getColony().getName(), SiteSelector.plainName(building));
         }
         if (building instanceof BuildingCowboy)
         {
@@ -72,7 +79,7 @@ final class SettingsKeeper
             setting.setValue(target);
             building.markDirty();
             ColonyAutopilot.LOGGER.info("[{}] raised {} to {} at the {} — the automation profile keeps it there",
-              building.getColony().getName(), label, target, building.getBuildingDisplayName());
+              building.getColony().getName(), label, target, SiteSelector.plainName(building));
         }
     }
 
@@ -84,7 +91,7 @@ final class SettingsKeeper
             setting.trigger();
             building.markDirty();
             ColonyAutopilot.LOGGER.info("[{}] switched {} ON at the {} — the automation profile keeps it that way",
-              building.getColony().getName(), label, building.getBuildingDisplayName());
+              building.getColony().getName(), label, SiteSelector.plainName(building));
         }
     }
 }

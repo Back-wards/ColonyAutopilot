@@ -7,6 +7,7 @@ import com.ldtteam.structurize.blueprints.v1.BlueprintTagUtils;
 import com.ldtteam.structurize.storage.ServerFutureProcessor;
 import com.ldtteam.structurize.storage.StructurePacks;
 import com.ldtteam.structurize.storage.StructurePackMeta;
+import com.ldtteam.structurize.util.IOPool;
 import com.minecolonies.api.IMinecoloniesAPI;
 import com.minecolonies.api.MinecoloniesAPIProxy;
 import com.minecolonies.api.blocks.AbstractBlockHut;
@@ -33,11 +34,15 @@ import com.minecolonies.api.util.WorldUtil;
 import com.minecolonies.api.items.ModItems;
 import com.minecolonies.api.util.constant.StatisticsConstants;
 import com.minecolonies.core.colony.buildings.AbstractBuildingGuards;
+import com.minecolonies.core.colony.buildings.modules.BuildingModules;
 import com.minecolonies.core.colony.buildings.modules.BuildingStatisticsModule;
 import com.minecolonies.core.colony.buildings.modules.EnchanterStationsModule;
 import com.minecolonies.core.colony.buildings.modules.GuardBuildingModule;
+import com.minecolonies.core.colony.buildings.modules.LivingBuildingModule;
 import com.minecolonies.core.colony.buildings.modules.MinimumStockModule;
+import com.minecolonies.core.colony.buildings.modules.WorkAtHomeBuildingModule;
 import com.minecolonies.core.colony.buildings.modules.WorkerBuildingModule;
+import com.minecolonies.core.colony.buildings.modules.settings.IntSetting;
 import com.minecolonies.core.util.BuildingUtils;
 import com.minecolonies.core.blocks.BlockDecorationController;
 import com.minecolonies.core.colony.workorders.WorkOrderBuilding;
@@ -51,12 +56,15 @@ import com.minecolonies.core.colony.buildings.workerbuildings.BuildingConcreteMi
 import com.minecolonies.core.colony.buildings.workerbuildings.BuildingFarmer;
 import com.minecolonies.core.colony.buildings.workerbuildings.BuildingNetherWorker;
 import com.minecolonies.core.colony.buildings.workerbuildings.BuildingPlantation;
+import com.minecolonies.core.colony.buildings.workerbuildings.BuildingStable;
+import com.minecolonies.core.entity.other.cavalry.CavalryHorseEntity;
 import com.minecolonies.core.tileentities.TileEntityColonyBuilding;
-import com.mojang.authlib.GameProfile;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.GlobalPos;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
@@ -79,11 +87,11 @@ import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.common.util.FakePlayer;
-import net.neoforged.neoforge.common.util.FakePlayerFactory;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Collection;
@@ -92,6 +100,7 @@ import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -132,6 +141,11 @@ public class GrowthDirector
     List<SiteSelector.Footprint> reservedPads(final IColony colony)
     {
         return List.copyOf(lastTerraform.getOrDefault(ColonyAutopilot.colonyKey(colony), Map.of()).values());
+    }
+
+    static boolean shortOfPlots(final IColony colony)
+    {
+        return instance != null && instance.plotShortage.getOrDefault(ColonyAutopilot.colonyKey(colony), Set.of()).size() >= PLOT_SHORTAGE_HUTS;
     }
 
     void queueOutfit(final IBuilding building)
@@ -203,6 +217,58 @@ public class GrowthDirector
 
     private final Map<ColonyId, Set<Block>> unavailableHuts = new HashMap<>();
 
+    private final Map<ColonyId, String> unavailablePack = new HashMap<>();
+
+    private static final Map<String, Boolean> stableInPack = new HashMap<>();
+
+    private static final Map<String, Long> stableProbedAt = new HashMap<>();
+
+    static Boolean shipsStable(final IColony colony)
+    {
+        final String packName = colony.getStructurePack();
+        final Boolean known = stableInPack.get(packName);
+        final StructurePackMeta pack = known == null ? StructurePacks.getStructurePack(packName) : null;
+        if (known != null || !(colony.getWorld() instanceof ServerLevel level) || pack == null)
+        {
+            return known;
+        }
+
+        final Long asked = stableProbedAt.get(packName);
+        if (asked != null && level.getGameTime() - asked < 2400)
+        {
+            return null;
+        }
+
+        final ColonyGrounds world = ColonyGrounds.get(level.getServer().overworld());
+        final String edition = pack.isImmutable()
+                                 ? pack.getVersion() + java.util.stream.Stream.of(pack.getOwner(), "structurize", "minecolonies", ColonyAutopilot.MOD_ID).distinct()
+                                     .map(mod -> " " + mod + "@" + net.neoforged.fml.ModList.get().getModContainerById(mod)
+                                       .map(container -> container.getModInfo().getVersion().toString()).orElse("-"))
+                                     .collect(java.util.stream.Collectors.joining())
+                                 : null;
+        final Boolean saved = edition == null ? null : world.stableInPack(packName, edition);
+        if (saved != null)
+        {
+            stableInPack.put(packName, saved);
+            return saved;
+        }
+        stableProbedAt.put(packName, level.getGameTime());
+
+        final String hutName = ModBlocks.blockHutStable.getBlueprintName();
+        final HolderLookup.Provider registries = level.registryAccess();
+        final CompletableFuture<Blueprint> future = CompletableFuture.supplyAsync(
+          () -> findDesign(packName, ModBlocks.blockHutStable, hutName, null, registries), IOPool.getExecutor());
+        ServerFutureProcessor.queueBlueprint(new ServerFutureProcessor.BlueprintProcessingData(future, level, found -> {
+            stableInPack.put(packName, found != null);
+            stableProbedAt.remove(packName);
+            if (edition != null)
+            {
+                world.setStableInPack(packName, edition, found != null);
+            }
+        }));
+        return null;
+    }
+
     private final Map<ColonyId, Map<Block, Long>> plotBlockedUntil = new HashMap<>();
 
     private final Map<ColonyId, Set<Block>> researchLockLogged = new HashMap<>();
@@ -229,6 +295,10 @@ public class GrowthDirector
 
     private final Map<ColonyId, BlockPos> townHallAproned = new HashMap<>();
 
+    private final Map<ColonyId, Integer> apronRetries = new HashMap<>();
+
+    private static final int APRON_RETRIES = 5;
+
     private final Map<GlobalPos, Long> offsetLearning = new HashMap<>();
 
     private final Map<GlobalPos, Integer> offsetMisses = new HashMap<>();
@@ -240,6 +310,8 @@ public class GrowthDirector
 
     private final Map<ColonyId, VillageGrounds.Sweep> groundsSweeps = new HashMap<>();
 
+    private final Set<ColonyId> sweepOwed = new HashSet<>();
+
     private final Map<ColonyId, RavineSurvey> ravineSurveys = new HashMap<>();
 
     private final JobWatch jobWatch = new JobWatch();
@@ -250,11 +322,25 @@ public class GrowthDirector
 
     private final Map<ColonyId, List<BlockPos>> fallDeathSpots = new HashMap<>();
 
+    private final Map<BlockPos, IColony> rescuedHoles = new LinkedHashMap<>();
+
+    private final Set<BlockPos> holesAwaiting = new HashSet<>();
+
     private final Map<ColonyId, Map<Block, Integer>> plotFailStrikes = new HashMap<>();
+
+    private static final int PLOT_SHORTAGE_HUTS = 3;
+
+    private record FirstStrike(String name, long until, boolean carried) {}
+
+    private final Map<ColonyId, Map<Block, FirstStrike>> firstStrikeRun = new HashMap<>();
+
+    private final Map<ColonyId, Set<Block>> plotShortage = new HashMap<>();
 
     private final Map<ColonyId, Map<Block, Integer>> fullParks = new HashMap<>();
 
-    private record Rescue(String stepName, BlockPos frontier)
+    private final Map<ColonyId, Set<Block>> structuresYielded = new HashMap<>();
+
+    private record Rescue(String stepName, Block hut, BlockPos frontier, SiteSelector.Footprint land)
     {
     }
 
@@ -284,7 +370,11 @@ public class GrowthDirector
 
     private static final int HEAVY_CARVE_EXPANSIONS = 10_000;
 
-    private final Map<ColonyId, Long> rescueRefusedAt = new HashMap<>();
+    private final Map<ColonyId, Set<Block>> rescueRefused = new HashMap<>();
+
+    private final Map<ColonyId, Long> importantCallUnanswered = new HashMap<>();
+
+    private final Map<ColonyId, Long> walkPlacedLast = new HashMap<>();
 
     private final List<IBuilding> reconnectLater = new ArrayList<>();
 
@@ -293,6 +383,12 @@ public class GrowthDirector
     private final Map<ColonyId, Map<BlockPos, DeadRoad>> deadRoads = new HashMap<>();
 
     private record DeadRoad(int cells, boolean told)
+    {
+    }
+
+    private final Map<ColonyId, Map<BlockPos, OrphanRoad>> orphanRoads = new HashMap<>();
+
+    private record OrphanRoad(Set<BlockPos> blocks, int days)
     {
     }
 
@@ -388,17 +484,46 @@ public class GrowthDirector
         }
         final Map<Block, Integer> countByHut = new HashMap<>();
         final Map<Block, Integer> maxLevelByHut = new HashMap<>();
+
+        int lowestHomeLevel = Integer.MAX_VALUE;
+        int homeBlueprintMax = 0;
+        int homesShallow = 0;
         for (final IBuilding building : colony.getServerBuildingManager().getBuildings().values())
         {
-            countByHut.merge(building.getBuildingType().getBuildingBlock(), 1, Integer::sum);
-            maxLevelByHut.merge(building.getBuildingType().getBuildingBlock(), building.getBuildingLevel(), Integer::max);
+            final Block block = building.getBuildingType().getBuildingBlock();
+            countByHut.merge(block, 1, Integer::sum);
+            maxLevelByHut.merge(block, building.getBuildingLevel(), Integer::max);
+            if (block == ModBlocks.blockHutHome)
+            {
+                lowestHomeLevel = Math.min(lowestHomeLevel, building.getBuildingLevel());
+                homeBlueprintMax = Math.max(homeBlueprintMax, building.getMaxBuildingLevel());
+                if (building.getBuildingLevel() <= 1)
+                {
+                    homesShallow++;
+                }
+            }
         }
         final ColonyId key = ColonyAutopilot.colonyKey(colony);
         final Set<Block> unavailable = unavailableHuts.getOrDefault(key, Set.of());
+        final Map<Block, Long> plotBlocked = plotBlockedUntil.getOrDefault(key, Map.of());
+        final var census = colony.getCitizenManager();
+        final int citizens = census.getCurrentCitizenCount();
+        final boolean bedCapped = census.getMaxCitizens() > 0 && citizens >= census.getMaxCitizens()
+              && census.getMaxCitizens() < census.maxCitizensFromResearch();
         final List<ResolvedStep> walk = planFor(colony);
+
+        final Boolean stableShipped = stableInPack.get(colony.getStructurePack());
         int met = 0;
         int waived = 0;
-        ResolvedStep next = null;
+
+        ResolvedStep first = null;
+        String next = null;
+        String why = null;
+        String passed = null;
+        int passedOver = 0;
+
+        final StringBuilder importantPassed = new StringBuilder();
+        int importantNamed = 0;
         for (final ResolvedStep step : walk)
         {
             if (unavailable.contains(step.hut()))
@@ -417,67 +542,161 @@ public class GrowthDirector
             {
                 met++;
             }
+
+            else if (step.targetLevel() == 0 && step.hut() == ModBlocks.blockHutStable && Boolean.FALSE.equals(stableShipped))
+            {
+                met++;
+                waived++;
+            }
             else if (next == null)
             {
-                next = step;
+                if (first == null)
+                {
+                    first = step;
+                }
+
+                final boolean barracks = step.targetLevel() == 0 && step.hut() == ModBlocks.blockHutGuardTower && barracksDue(colony, countByHut, unavailable);
+                final Block hut = barracks ? ModBlocks.blockHutBarracks : step.hut();
+                final ResourceLocation research = colony.getResearchManager().getResearchEffectIdFrom(hut);
+                final String hold = hut == ModBlocks.blockHutHome
+                                      ? housingHold(colony, countByHut.getOrDefault(hut, 0), lowestHomeLevel, homeBlueprintMax,
+                                          maxLevelByHut.getOrDefault(ModBlocks.blockHutTownHall, 0), bedCapped, homesShallow)
+                                      : null;
+                final String reason;
+                boolean stops = true;
+                if (step.targetLevel() > 0 && citizens >= step.minCitizens())
+                {
+                    final int stands = maxLevelByHut.getOrDefault(hut, 0);
+
+                    final boolean ours = stands == 0 ? AutopilotConfig.buildsPlacedHuts(colony) : AutopilotConfig.upgradesBuildings(colony);
+                    reason = (ours ? "raising it" : "yours to raise (switched off under autoupgrade)")
+                               + " from level " + stands + " to " + step.targetLevel() + " — the plan waits on the hall";
+                }
+                else if (step.targetLevel() == 0 && hut == ModBlocks.blockHutTownHall)
+                {
+                    reason = "no town hall stands — place yours; the plan never places one";
+                }
+
+                else if (step.targetLevel() == 0 && importantHut(hut) && terraformer != null && terraformer.cuttingPadFor(colony, hut))
+                {
+                    reason = "its ground is being levelled";
+                }
+                else if (step.targetLevel() == 0 && colony.getWorld() != null && plotBlocked.getOrDefault(hut, 0L) > colony.getWorld().getGameTime())
+                {
+
+                    final Rescue bridging = builderRescue.get(key);
+                    reason = bridging != null && bridging.hut() == hut
+                               ? "waiting for a builder's hut to reach its land at " + bridging.frontier().toShortString() + " (parked)"
+                               : "no buildable plot yet (parked)";
+                    stops = false;
+                }
+
+                else if (step.targetLevel() == 0 && hut == ModBlocks.blockHutStable && stableShipped == null)
+                {
+
+                    reason = StructurePacks.getStructurePack(colony.getStructurePack()) == null
+                               ? "structure pack '" + colony.getStructurePack() + "' is not loaded" : "looking for its blueprint in the style pack";
+                    stops = false;
+                }
+                else if (citizens < step.minCitizens())
+                {
+                    reason = "waiting for " + step.minCitizens() + " citizens (has " + citizens + ")";
+                }
+
+                else if (MinecoloniesAPIProxy.getInstance().getGlobalResearchTree().hasResearchEffect(research)
+                           && colony.getResearchManager().getResearchEffects().getEffectStrength(research) < 1)
+                {
+                    reason = "awaits university research";
+                    stops = false;
+                }
+                else if (hold != null)
+                {
+                    reason = hold.startsWith("cap") ? "held at " + hold + ": the town hall must rise before more homes do"
+                               : "held: the standing homes " + hold + " first";
+                    stops = false;
+                }
+
+                else if (hut != ModBlocks.blockHutHome && !importantHut(hut) && citizens >= census.getMaxCitizens() && census.getJoblessCitizen() == null)
+                {
+                    reason = "nobody is free to staff it";
+                    stops = false;
+                }
+                else
+                {
+                    reason = StructurePacks.getStructurePack(colony.getStructurePack()) == null
+                               ? "structure pack '" + colony.getStructurePack() + "' is not loaded" : "next up";
+                }
+                if (stops)
+                {
+                    next = barracks ? "Barracks" : step.name();
+
+                    why = "next up".equals(reason) && importantHut(hut)
+                            && countByHut.getOrDefault(ModBlocks.blockHutGuardTower, 0) + countByHut.getOrDefault(ModBlocks.blockHutBarracks, 0) > 0
+                            ? reason + " — new guard posts and builders' huts wait for it" : reason;
+                }
+                else if (passedOver++ == 0)
+                {
+                    passed = (barracks ? "Barracks" : step.name()) + " (" + reason + ")";
+                }
+                else if (importantHut(hut))
+                {
+
+                    importantPassed.append(", ").append(step.name()).append(" (").append(reason).append(")");
+                    importantNamed++;
+                }
             }
         }
 
         final String off = !AutopilotConfig.masterOn()
                              ? "the autopilot is OFF in this world — nothing is placed or upgraded until /colonyautopilot on"
                              : !AutopilotConfig.get(colony, AutopilotConfig.GROWTH_ENABLED)
-                                 ? "growth is OFF for this colony (growth.enabled) — nothing new is placed; upgrades follow autoupgrade.enabled"
+                                 ? "growth is OFF for this colony (growth.enabled) — nothing new is placed; upgrades follow the autoupgrade switches"
                                  : null;
-        if (next == null)
+        if (first == null)
         {
+
+            final String upgradesNote = AutopilotConfig.upgradesBuildings(colony) ? "upgrades continue" : "upgrades are yours (switched off under autoupgrade)";
             return "growth: plan complete (" + met + "/" + walk.size() + " steps"
                      + (waived > 0 ? ", " + waived + " waived — no blueprint for them" : "")
                      + (off != null ? ") — " + off
-                          : AutopilotConfig.get(colony, AutopilotConfig.EXPANSION_ENABLED) ? ") — expansion and upgrades continue"
-                          : ") — expansion is OFF ('/colonyautopilot expansion on' resumes it), upgrades continue");
+                          : AutopilotConfig.get(colony, AutopilotConfig.EXPANSION_ENABLED) ? ") — expansion continues, " + upgradesNote
+                          : ") — expansion is OFF ('/colonyautopilot expansion on' resumes it), " + upgradesNote);
         }
-        final String why;
-        final ResourceLocation nextResearch = colony.getResearchManager().getResearchEffectIdFrom(next.hut());
+        final String steps = "growth: " + met + "/" + walk.size() + " steps — next: ";
+
         if (off != null)
         {
-            why = off;
+            return steps + first.name() + " (" + off + ")";
         }
-        else if (!AutopilotConfig.get(colony, AutopilotConfig.EXPANSION_ENABLED))
+        if (!AutopilotConfig.get(colony, AutopilotConfig.EXPANSION_ENABLED))
         {
-            why = "expansion is OFF — nothing new is placed; '/colonyautopilot expansion on' resumes it";
+            return steps + first.name() + " (expansion is OFF — nothing new is placed; '/colonyautopilot expansion on' resumes it)";
         }
-        else if (next.hut() == ModBlocks.blockHutTownHall && next.targetLevel() == 0)
-        {
-            why = "no town hall stands — place yours; the plan never places one";
-        }
-        else if (colony.getCitizenManager().getCurrentCitizenCount() < next.minCitizens())
-        {
-            why = "waiting for " + next.minCitizens() + " citizens (has " + colony.getCitizenManager().getCurrentCitizenCount() + ")";
-        }
-        else if (next.targetLevel() > 0)
-        {
-            why = "raising it from level " + maxLevelByHut.getOrDefault(next.hut(), 0) + " to " + next.targetLevel() + " — the plan waits on the hall";
-        }
+        final int unnamed = passedOver - 1 - importantNamed;
+        final String over = passedOver == 0 ? "" : "passed over: " + passed + importantPassed
+                                                     + (unnamed > 0 ? " and " + unnamed + " more" : "");
 
-        else if (MinecoloniesAPIProxy.getInstance().getGlobalResearchTree().hasResearchEffect(nextResearch)
-                   && colony.getResearchManager().getResearchEffects().getEffectStrength(nextResearch) < 1)
+        final String held = AutopilotConfig.progressionMode(colony) ? BuilderCap.holdText(colony) : "";
+        return steps + (next == null ? "nothing the plan can place just now; " + over : next + " (" + why + ")" + (over.isEmpty() ? "" : "; " + over))
+                 + (held.isEmpty() ? "" : " — " + held);
+    }
+
+    static int beds(final IColony colony)
+    {
+        final int beds = colony.getCitizenManager().getMaxCitizens();
+        if (beds > 1)
         {
-            why = "awaits university research";
+            return beds;
         }
-        else if (colony.getWorld() != null
-                   && plotBlockedUntil.getOrDefault(key, Map.of()).getOrDefault(next.hut(), 0L) > colony.getWorld().getGameTime())
+        for (final IBuilding building : colony.getServerBuildingManager().getBuildings().values())
         {
-            why = "no buildable plot yet (parked)";
+            if (building.getBuildingLevel() > 0 && (building.hasModule(LivingBuildingModule.class)
+                  || (building.hasModule(BuildingModules.BED) && building.hasModule(WorkAtHomeBuildingModule.class))))
+            {
+                return beds;
+            }
         }
-        else if (StructurePacks.getStructurePack(colony.getStructurePack()) == null)
-        {
-            why = "structure pack '" + colony.getStructurePack() + "' is not loaded";
-        }
-        else
-        {
-            why = "next up";
-        }
-        return "growth: " + met + "/" + walk.size() + " steps — next: " + next.name() + " (" + why + ")";
+        return 0;
     }
 
     List<SiteSelector.Footprint> reservedFootprints(final IColony colony)
@@ -524,6 +743,8 @@ public class GrowthDirector
             final BlockPos loc = order.getLocation();
             sacred.add(new SiteSelector.Footprint(loc.getX() - 9, loc.getZ() - 9, loc.getX() + 9, loc.getZ() + 9));
         }
+
+        sacred.addAll(PlantationFields.fieldGround(colony));
         if (colony.getWorld() instanceof ServerLevel level)
         {
             for (final IBuilding building : colony.getServerBuildingManager().getBuildings().values())
@@ -532,17 +753,22 @@ public class GrowthDirector
                 {
 
                     final List<BlockPos> waters = FishingPond.memorizedWaters(building);
-                    final BlockPos trusted = FishingPond.findTrustedWater(level, FishingPond.groundAnchor(level, colony, building.getPosition()));
-                    if (trusted != null)
+                    final List<SiteSelector.Footprint> dug = FishingPond.dugPondShields(level, colony, building);
+
+                    if (dug.isEmpty())
                     {
-                        waters.add(trusted);
+                        final BlockPos trusted = FishingPond.findTrustedWater(level, FishingPond.groundAnchor(level, colony, building.getPosition()));
+                        if (trusted != null)
+                        {
+                            waters.add(trusted);
+                        }
                     }
                     for (final BlockPos water : waters)
                     {
                         sacred.add(new SiteSelector.Footprint(water.getX() - 6, water.getZ() - 6, water.getX() + 6, water.getZ() + 6));
                     }
 
-                    sacred.addAll(FishingPond.dugPondShields(level, colony, building));
+                    sacred.addAll(dug);
                 }
             }
         }
@@ -570,50 +796,53 @@ public class GrowthDirector
             }
         }
         sacred.addAll(ProtectedZones.footprintsFor(colony));
+
+        sacred.addAll(WorldStructures.footprintsFor(colony));
         return sacred;
+    }
+
+    private static String housingHold(final IColony colony, final int homes, final int lowestHomeLevel, final int homeBlueprintMax,
+      final int townHallLevel, final boolean bedCapped, final int homesShallow)
+    {
+        if (homes <= 1)
+        {
+            return null;
+        }
+        final int cap = 3 + 2 * townHallLevel;
+
+        final int ceiling = AutopilotConfig.upgradesBuildings(colony) ? Math.min(Math.max(1, homeBlueprintMax), townHallLevel + 1) : 1;
+        if (lowestHomeLevel < ceiling)
+        {
+
+            return bedCapped && homes < cap && homesShallow < 2 ? null : "deepen to level " + ceiling;
+        }
+
+        return homes < cap || bedCapped ? null : "cap " + cap;
     }
 
     private boolean homePlacementHeld(final IColony colony, final ColonyId key, final int homes,
       final int lowestHomeLevel, final int homeBlueprintMax, final int townHallLevel, final boolean bedCapped, final int homesShallow)
     {
-        if (homes <= 1)
-        {
-            housingHoldLogged.remove(key);
-            return false;
-        }
-        final int cap = 3 + 2 * townHallLevel;
-        final int ceiling = Math.min(Math.max(1, homeBlueprintMax), townHallLevel + 1);
-        final String hold;
-        if (lowestHomeLevel < ceiling)
-        {
-            if (bedCapped && homes < cap && homesShallow < 2)
-            {
-                housingHoldLogged.remove(key);
-                return false;
-            }
-            hold = "deepen to " + ceiling;
-        }
-        else if (homes < cap)
-        {
-            hold = null;
-        }
-        else if (bedCapped)
-        {
+        final String hold = housingHold(colony, homes, lowestHomeLevel, homeBlueprintMax, townHallLevel, bedCapped, homesShallow);
 
-            if (!("over " + homes).equals(housingHoldLogged.put(key, "over " + homes)))
-            {
-                ColonyAutopilot.LOGGER.info("[{}] housing exceeds its cap: {} homes at cap {} (town hall level {}), all at ceiling {}, and beds still bind — placing one more",
-                  colony.getName(), homes, cap, townHallLevel, ceiling);
-            }
-            return false;
-        }
-        else
-        {
-            hold = "cap " + cap;
-        }
+        final int cap = 3 + 2 * townHallLevel;
+        final int ceiling = AutopilotConfig.upgradesBuildings(colony) ? Math.min(Math.max(1, homeBlueprintMax), townHallLevel + 1) : 1;
         if (hold == null)
         {
-            housingHoldLogged.remove(key);
+
+            if (homes >= cap)
+            {
+
+                if (!("over " + homes).equals(housingHoldLogged.put(key, "over " + homes)))
+                {
+                    ColonyAutopilot.LOGGER.info("[{}] housing exceeds its cap: {} homes at cap {} (town hall level {}), all at ceiling {}, and beds still bind — placing one more",
+                      colony.getName(), homes, cap, townHallLevel, ceiling);
+                }
+            }
+            else
+            {
+                housingHoldLogged.remove(key);
+            }
             return false;
         }
         if (!hold.equals(housingHoldLogged.put(key, hold)))
@@ -751,9 +980,11 @@ public class GrowthDirector
         int blocks = 0;
         for (final Map.Entry<BlockPos, List<BlockPos>> entry : new ArrayList<>(ledger.entrySet()))
         {
-            final List<BlockPos> left = VillagePaths.erase(level, entry.getValue(), Set.of(), Set.of());
+            final List<BlockPos> left = VillagePaths.erase(level, entry.getValue(), Set.of(), Set.of(), ColonyGrounds.get(level).roadWater(colony.getID()));
             blocks += entry.getValue().size() - left.size();
             roads++;
+
+            ColonyGrounds.get(level).setRoadLine(colony.getID(), entry.getKey(), null);
             if (left.isEmpty())
             {
                 ledger.remove(entry.getKey());
@@ -780,6 +1011,12 @@ public class GrowthDirector
         if (blocked != null)
         {
             blocked.remove(hut);
+        }
+
+        final Map<Block, FirstStrike> run = firstStrikeRun.get(key);
+        if (run != null)
+        {
+            run.remove(hut);
         }
     }
 
@@ -817,6 +1054,7 @@ public class GrowthDirector
         final IBuilding built = event.getBuilding();
 
         if (event.getWorkOrder().getWorkOrderType() == WorkOrderType.BUILD
+              && !built.hasParent()
               && built.getBuildingType().getBuildingBlock() != ModBlocks.blockHutTownHall
               && built.getColony() != null && built.getColony().getWorld() instanceof ServerLevel world
               && !ColonyGrounds.get(world).hasAnchorOffset(built.getColony().getID(), built.getPosition()))
@@ -829,6 +1067,7 @@ public class GrowthDirector
         {
             ColonyGrounds.get(level).clearApronDone(built.getColony().getID());
             townHallAproned.remove(ColonyAutopilot.colonyKey(built.getColony()));
+            apronRetries.remove(ColonyAutopilot.colonyKey(built.getColony()));
         }
     }
 
@@ -859,14 +1098,19 @@ public class GrowthDirector
         ColonyAutopilot.LOGGER.info("[{}] {} died to the terrain ({}) at {}",
           citizen.getColony().getName(), citizen.getName(), source.getMsgId(), where.toShortString());
 
-        int villageTop = citizen.getColony().getCenter().getY();
-        for (final IBuilding built : citizen.getColony().getServerBuildingManager().getBuildings().values())
-        {
-            villageTop = Math.max(villageTop, built.getPosition().getY());
-        }
-        if (where.getY() > villageTop + 24)
+        if (where.getY() > villageTop(citizen.getColony()) + 24)
         {
             return;
+        }
+
+        if (citizen.getColony().getWorld() instanceof ServerLevel land && WorldUtil.isChunkLoaded(land, where.getX() >> 4, where.getZ() >> 4))
+        {
+            final IColony landlord = IColonyManager.getInstance().getColonyByPosFromWorld(land, where);
+            if (landlord != null && landlord != citizen.getColony())
+            {
+                ColonyAutopilot.LOGGER.info("[{}] that spot is {}'s land — it is left as it lies", citizen.getColony().getName(), landlord.getName());
+                return;
+            }
         }
 
         if (source.is(DamageTypeTags.IS_FIRE) && citizen.getColony().getWorld() instanceof ServerLevel level)
@@ -900,7 +1144,7 @@ public class GrowthDirector
             padLanding(level, citizen.getColony(), where);
             if (secondStrike(fallDeathSpots, citizen.getColony(), where))
             {
-                fillDeadlyDrop(level, citizen.getColony(), where);
+                fillDeadlyDrop(level, citizen.getColony(), where, null);
             }
         }
 
@@ -920,9 +1164,11 @@ public class GrowthDirector
         }
     }
 
-    private static List<SiteSelector.Footprint> untouchableGround(final IColony colony)
+    private static List<SiteSelector.Footprint> untouchableGround(final ServerLevel level, final IColony colony,
+      final int minX, final int minZ, final int maxX, final int maxZ)
     {
         final List<SiteSelector.Footprint> ground = new ArrayList<>(ProtectedZones.footprintsFor(colony));
+        ground.addAll(SiteSelector.foreignClaims(level, colony, minX, minZ, maxX, maxZ));
         for (final IBuilding building : colony.getServerBuildingManager().getBuildings().values())
         {
 
@@ -934,32 +1180,25 @@ public class GrowthDirector
         return ground;
     }
 
-    private static boolean shieldedColumn(final List<SiteSelector.Footprint> boxes, final int x, final int z)
-    {
-        for (final SiteSelector.Footprint box : boxes)
-        {
-            if (box.intersects(x, z, x, z))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private static void sealLavaAround(final ServerLevel level, final IColony colony, final BlockPos center)
     {
         if (!AutopilotConfig.live(colony, AutopilotConfig.TERRAFORM_ENABLED))
         {
             return;
         }
-        final List<SiteSelector.Footprint> shields = untouchableGround(colony);
         final int radius = 12;
-        if (!WorldUtil.isChunkLoaded(level, (center.getX() - radius) >> 4, (center.getZ() - radius) >> 4)
-              || !WorldUtil.isChunkLoaded(level, (center.getX() + radius) >> 4, (center.getZ() - radius) >> 4)
-              || !WorldUtil.isChunkLoaded(level, (center.getX() - radius) >> 4, (center.getZ() + radius) >> 4)
-              || !WorldUtil.isChunkLoaded(level, (center.getX() + radius) >> 4, (center.getZ() + radius) >> 4))
+        final List<SiteSelector.Footprint> shields = untouchableGround(level, colony,
+          center.getX() - radius, center.getZ() - radius, center.getX() + radius, center.getZ() + radius);
+
+        for (int chunkX = (center.getX() - radius) >> 4; chunkX <= (center.getX() + radius) >> 4; chunkX++)
         {
-            return;
+            for (int chunkZ = (center.getZ() - radius) >> 4; chunkZ <= (center.getZ() + radius) >> 4; chunkZ++)
+            {
+                if (!WorldUtil.isChunkLoaded(level, chunkX, chunkZ))
+                {
+                    return;
+                }
+            }
         }
         int sealed = 0;
         final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
@@ -967,7 +1206,7 @@ public class GrowthDirector
         {
             for (int z = center.getZ() - radius; z <= center.getZ() + radius; z++)
             {
-                if (shieldedColumn(shields, x, z))
+                if (SiteSelector.insideAny(shields, x, z))
                 {
                     continue;
                 }
@@ -1031,8 +1270,8 @@ public class GrowthDirector
             ColonyAutopilot.LOGGER.info("[{}] could not pad the fall at {} — its chunk is not loaded", colony.getName(), center.toShortString());
             return;
         }
-        final List<SiteSelector.Footprint> shields = untouchableGround(colony);
-        if (shieldedColumn(shields, center.getX(), center.getZ()))
+        final List<SiteSelector.Footprint> shields = untouchableGround(level, colony, center.getX() - 1, center.getZ() - 1, center.getX() + 1, center.getZ() + 1);
+        if (SiteSelector.insideAny(shields, center.getX(), center.getZ()))
         {
             ColonyAutopilot.LOGGER.info("[{}] fall at {} not padded — inside a building's grounds or a protected zone", colony.getName(), center.toShortString());
             return;
@@ -1045,7 +1284,7 @@ public class GrowthDirector
             for (int z = -1; z <= 1; z++)
             {
 
-                if (shieldedColumn(shields, center.getX() + x, center.getZ() + z)
+                if (SiteSelector.insideAny(shields, center.getX() + x, center.getZ() + z)
                       || !WorldUtil.isChunkLoaded(level, (center.getX() + x) >> 4, (center.getZ() + z) >> 4))
                 {
                     continue;
@@ -1112,7 +1351,7 @@ public class GrowthDirector
                 {
                     for (int z = -1; z <= 1 && padded == 0; z++)
                     {
-                        if (shieldedColumn(shields, center.getX() + x, center.getZ() + z)
+                        if (SiteSelector.insideAny(shields, center.getX() + x, center.getZ() + z)
                               || !WorldUtil.isChunkLoaded(level, (center.getX() + x) >> 4, (center.getZ() + z) >> 4))
                         {
                             continue;
@@ -1138,12 +1377,13 @@ public class GrowthDirector
         }
     }
 
-    private void fillDeadlyDrop(final ServerLevel level, final IColony colony, final BlockPos center)
+    private int fillDeadlyDrop(final ServerLevel level, final IColony colony, final BlockPos center, final Set<Long> hole)
     {
+        final String what = hole == null ? "the twice-deadly drop" : "the hole citizens were rescued from twice";
         if (!AutopilotConfig.live(colony, AutopilotConfig.TERRAFORM_ENABLED))
         {
-            ColonyAutopilot.LOGGER.debug("[{}] the twice-deadly drop at {} stays — terraforming is disabled", colony.getName(), center.toShortString());
-            return;
+            ColonyAutopilot.LOGGER.debug("[{}] {} at {} stays — terraforming is disabled", colony.getName(), what, center.toShortString());
+            return 0;
         }
         final int radius = 4;
         if (!WorldUtil.isChunkLoaded(level, (center.getX() - radius) >> 4, (center.getZ() - radius) >> 4)
@@ -1151,14 +1391,19 @@ public class GrowthDirector
               || !WorldUtil.isChunkLoaded(level, (center.getX() - radius) >> 4, (center.getZ() + radius) >> 4)
               || !WorldUtil.isChunkLoaded(level, (center.getX() + radius) >> 4, (center.getZ() + radius) >> 4))
         {
-            ColonyAutopilot.LOGGER.info("[{}] could not fill the twice-deadly drop at {} — its ground is not fully loaded", colony.getName(), center.toShortString());
-            return;
+            ColonyAutopilot.LOGGER.info("[{}] could not fill {} at {} — its ground is not fully loaded", colony.getName(), what, center.toShortString());
+            return 0;
         }
-        final List<SiteSelector.Footprint> plots = untouchableGround(colony);
+        final List<SiteSelector.Footprint> plots = untouchableGround(level, colony,
+          center.getX() - radius, center.getZ() - radius, center.getX() + radius, center.getZ() + radius);
 
         Integer rim = null;
+        for (final long cell : hole == null ? Set.<Long>of() : hole)
+        {
+            rim = rim == null ? BlockPos.getY(cell) : Math.max(rim, BlockPos.getY(cell));
+        }
         final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-        for (int x = center.getX() - radius; x <= center.getX() + radius; x++)
+        for (int x = center.getX() - radius; hole == null && x <= center.getX() + radius; x++)
         {
             for (int z = center.getZ() - radius; z <= center.getZ() + radius; z++)
             {
@@ -1181,17 +1426,86 @@ public class GrowthDirector
         {
             ColonyAutopilot.LOGGER.info("[{}] could not fill the twice-deadly drop at {} — no solid rim reads around it",
               colony.getName(), center.toShortString());
-            return;
+            return 0;
+        }
+        if (hole != null)
+        {
+
+            final Set<Long> band = roadBand(colony, level);
+            boolean village = false;
+            for (final long cell : hole)
+            {
+                village |= band.contains(BlockPos.asLong(BlockPos.getX(cell), 0, BlockPos.getZ(cell)));
+            }
+            for (final IBuilding building : colony.getServerBuildingManager().getBuildings().values())
+            {
+                if (village || building.getBuildingLevel() <= 0)
+                {
+                    continue;
+                }
+                final SiteSelector.Footprint box = SiteSelector.boxOf(building);
+                for (final long cell : hole)
+                {
+                    village |= box.intersects(BlockPos.getX(cell) - RAVINE_SURVEY_MARGIN,
+                      BlockPos.getZ(cell) - RAVINE_SURVEY_MARGIN, BlockPos.getX(cell) + RAVINE_SURVEY_MARGIN, BlockPos.getZ(cell) + RAVINE_SURVEY_MARGIN);
+                }
+            }
+
+            final List<SiteSelector.Footprint> occupied = SiteSelector.occupiedGround(colony);
+            boolean shielded = false;
+            for (final long cell : hole)
+            {
+                shielded |= SiteSelector.insideAny(plots, BlockPos.getX(cell), BlockPos.getZ(cell))
+                              || SiteSelector.insideAny(occupied, BlockPos.getX(cell), BlockPos.getZ(cell));
+            }
+            if (!village)
+            {
+                ColonyAutopilot.LOGGER.info("[{}] the hole at {} where citizens were rescued twice is left as it is — it lies outside the village: no road beside it and no building within {} blocks",
+                  colony.getName(), center.toShortString(), RAVINE_SURVEY_MARGIN);
+                return 0;
+            }
+            if (shielded)
+            {
+                ColonyAutopilot.LOGGER.info("[{}] the hole at {} where citizens were rescued twice is left as it is — it lies in a building's grounds or site, a field, a protected zone or another colony's land",
+                  colony.getName(), center.toShortString());
+                return 0;
+            }
+            final int emptied = emptyHole(level, colony, center, hole, rim);
+            if (emptied <= 0)
+            {
+                return emptied;
+            }
         }
 
-        final boolean fisherWater = nearFisherWater(colony, center);
+        final boolean fisherWater = hole == null && nearFisherWater(colony, center);
         int leftForFisher = 0;
         int filled = 0;
+        int open = 0;
         for (int x = center.getX() - radius; x <= center.getX() + radius; x++)
         {
             columns:
             for (int z = center.getZ() - radius; z <= center.getZ() + radius; z++)
             {
+                if (hole != null && !hole.contains(BlockPos.asLong(x, rim, z)))
+                {
+                    continue;
+                }
+
+                boolean drop = false;
+                for (int y = rim; y >= center.getY() - 8 && !drop; y--)
+                {
+                    final BlockState state = level.getBlockState(pos.set(x, y, z));
+                    if (state.isSolidRender(level, pos))
+                    {
+                        break;
+                    }
+                    drop = state.isAir() || state.canBeReplaced() || !state.getFluidState().isEmpty();
+                }
+                if (!drop)
+                {
+                    continue;
+                }
+                open++;
                 for (final SiteSelector.Footprint plot : plots)
                 {
                     if (x >= plot.minX() && x <= plot.maxX() && z >= plot.minZ() && z <= plot.maxZ())
@@ -1224,15 +1538,291 @@ public class GrowthDirector
         }
         if (filled > 0)
         {
-            ColonyAutopilot.LOGGER.info("[{}] a second fall death at {} — filled the drop with {} blocks up to the surrounding grade; that crack takes nobody else",
+            ColonyAutopilot.LOGGER.info(hole == null
+                ? "[{}] a second fall death at {} — filled the drop with {} blocks up to the surrounding grade; that crack takes nobody else"
+                : "[{}] a second rescue from the hole at {} — filled it with {} blocks of earth up to the ground round it; that hole takes nobody else",
               colony.getName(), center.toShortString(), filled);
+        }
+        else if (open == 0)
+        {
+            ColonyAutopilot.LOGGER.info("[{}] a second fall death at {} — no drop lies below the surrounding ground there, so there is nothing to fill",
+              colony.getName(), center.toShortString());
         }
         else
         {
             ColonyAutopilot.LOGGER.warn(leftForFisher > 0
-                ? "[{}] the twice-deadly drop at {} could not be filled — its open columns hold water beside the fisher's hut (left whole for him) or belong to a building's plot"
-                : "[{}] the twice-deadly drop at {} could not be filled — every open column there belongs to a building's plot",
+                ? "[{}] the twice-deadly drop at {} could not be filled — its open columns hold water beside the fisher's hut (left whole for him) or belong to a building's plot, a protected zone or another colony's land"
+                : "[{}] the twice-deadly drop at {} could not be filled — every open column there belongs to a building's plot, a protected zone or another colony's land",
               colony.getName(), center.toShortString());
+        }
+        return filled;
+    }
+
+    private static int villageTop(final IColony colony)
+    {
+        int villageTop = colony.getCenter().getY();
+        for (final IBuilding built : colony.getServerBuildingManager().getBuildings().values())
+        {
+            villageTop = Math.max(villageTop, built.getPosition().getY());
+        }
+        return villageTop;
+    }
+
+    static Set<Long> holeAt(final ServerLevel level, final BlockPos spot)
+    {
+        final int radius = 4;
+        final int depth = 8;
+        final Map<Long, Integer> ground = new HashMap<>();
+        for (int x = spot.getX() - radius; x <= spot.getX() + radius; x++)
+        {
+            for (int z = spot.getZ() - radius; z <= spot.getZ() + radius; z++)
+            {
+                if (!WorldUtil.isChunkLoaded(level, x >> 4, z >> 4))
+                {
+                    return null;
+                }
+                ground.put(BlockPos.asLong(x, 0, z), SiteSelector.groundHeightBelow(level, x, z, spot.getY() + depth + 1) - 1);
+            }
+        }
+        final long own = BlockPos.asLong(spot.getX(), 0, spot.getZ());
+        final int floor = ground.get(own);
+        if (floor >= spot.getY())
+        {
+            return null;
+        }
+        Set<Long> under = null;
+        int top = floor + 1;
+        for (boolean runsOn = false; !runsOn; top++)
+        {
+            if (top > spot.getY() + depth)
+            {
+                return null;
+            }
+            final Set<Long> joined = new HashSet<>();
+            final ArrayDeque<Long> open = new ArrayDeque<>();
+            joined.add(own);
+            open.add(own);
+            while (!open.isEmpty() && !runsOn)
+            {
+                final long column = open.poll();
+                for (final Direction side : Direction.Plane.HORIZONTAL)
+                {
+                    final int x = BlockPos.getX(column) + side.getStepX();
+                    final int z = BlockPos.getZ(column) + side.getStepZ();
+                    final long next = BlockPos.asLong(x, 0, z);
+                    if (joined.contains(next) || ground.get(next) >= top)
+                    {
+                        continue;
+                    }
+                    if (Math.abs(x - spot.getX()) == radius || Math.abs(z - spot.getZ()) == radius)
+                    {
+                        runsOn = true;
+                        break;
+                    }
+                    joined.add(next);
+                    open.add(next);
+                }
+            }
+            if (!runsOn)
+            {
+                under = joined;
+            }
+        }
+        top -= 2;
+        if (under == null || top - floor < 2)
+        {
+            return null;
+        }
+        final Set<Long> cells = new HashSet<>();
+        final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+        for (final long column : under)
+        {
+            final int x = BlockPos.getX(column);
+            final int z = BlockPos.getZ(column);
+            final int bottom = ground.get(column);
+            final BlockState base = level.getBlockState(pos.set(x, bottom, z));
+            if (bottom < spot.getY() - depth - 1 || !base.getFluidState().isEmpty() || !base.isSolidRender(level, pos))
+            {
+                return null;
+            }
+            for (int y = bottom + 1; y <= top; y++)
+            {
+                final BlockState cell = level.getBlockState(pos.set(x, y, z));
+                if (!cell.isAir() && !(cell.canBeReplaced() && cell.getFluidState().isEmpty()))
+                {
+                    return null;
+                }
+                for (final Direction side : Direction.Plane.HORIZONTAL)
+                {
+                    if (!under.contains(BlockPos.asLong(x + side.getStepX(), 0, z + side.getStepZ())))
+                    {
+                        final BlockState wall = level.getBlockState(pos.set(x + side.getStepX(), y, z + side.getStepZ()));
+                        if (wall.isAir() || wall.canBeReplaced() || !wall.getFluidState().isEmpty() || wall.getCollisionShape(level, pos).isEmpty()
+                              || wall.is(net.minecraft.tags.BlockTags.DOORS) || wall.is(net.minecraft.tags.BlockTags.TRAPDOORS)
+                              || wall.is(net.minecraft.tags.BlockTags.FENCE_GATES) || wall.is(net.minecraft.tags.BlockTags.FENCES)
+                              || wall.is(net.minecraft.tags.BlockTags.WALLS))
+                        {
+                            return null;
+                        }
+                    }
+                }
+                cells.add(BlockPos.asLong(x, y, z));
+            }
+        }
+        return cells;
+    }
+
+    private int emptyHole(final ServerLevel level, final IColony colony, final BlockPos center, final Set<Long> hole, final int top)
+    {
+        final List<net.minecraft.world.entity.LivingEntity> inside = new ArrayList<>();
+        for (final net.minecraft.world.entity.Entity body : level.getEntities((net.minecraft.world.entity.Entity) null,
+          new net.minecraft.world.phys.AABB(center).inflate(4, 9, 4)))
+        {
+            final net.minecraft.world.phys.AABB box = body.getBoundingBox().deflate(1.0E-7);
+            boolean touches = false;
+            for (final BlockPos cell : BlockPos.betweenClosed(BlockPos.containing(box.minX, box.minY, box.minZ), BlockPos.containing(box.maxX, box.maxY, box.maxZ)))
+            {
+                touches |= hole.contains(cell.asLong());
+            }
+            if (!touches)
+            {
+                continue;
+            }
+            if (body instanceof net.minecraft.world.entity.player.Player || body.countPlayerPassengers() > 0)
+            {
+                if (holesAwaiting.add(center))
+                {
+                    ColonyAutopilot.LOGGER.info("[{}] the hole at {} where citizens were rescued twice waits to be filled — {} stands in it",
+                      colony.getName(), center.toShortString(), body.getName().getString());
+                }
+                return -1;
+            }
+
+            if (!(body instanceof net.minecraft.world.entity.LivingEntity living) || body.getVehicle() instanceof net.minecraft.world.entity.LivingEntity)
+            {
+                continue;
+            }
+            inside.add(living);
+        }
+
+        final List<net.minecraft.world.entity.LivingEntity> unmoved = new ArrayList<>();
+        for (final net.minecraft.world.entity.LivingEntity body : inside)
+        {
+            final String moved = body instanceof com.minecolonies.api.entity.citizen.AbstractEntityCitizen citizen && citizen.getCitizenData() != null
+                                   ? (WaterRescue.recall(level, citizen, citizen.getCitizenData().getHomePosition()) ? "sent home" : null)
+                                   : (body instanceof net.minecraft.world.entity.Mob mob && WaterRescue.recallToStall(level, mob) != null ? "sent to a stall of its Stable" : null);
+            if (moved == null)
+            {
+                unmoved.add(body);
+                continue;
+            }
+            ColonyAutopilot.LOGGER.info("[{}] {} stood in the hole at {} — {} before it is filled",
+              colony.getName(), body.getName().getString(), center.toShortString(), moved);
+        }
+        for (final net.minecraft.world.entity.LivingEntity body : unmoved)
+        {
+
+            net.minecraft.world.phys.AABB landing = body.getBoundingBox().move(0, top + 1 - body.getY(), 0);
+            for (final net.minecraft.world.entity.Entity rider : body.getPassengers())
+            {
+                landing = landing.minmax(rider.getBoundingBox().move(0, top + 1 - body.getY(), 0));
+            }
+            if (!level.noCollision(body, landing))
+            {
+                ColonyAutopilot.LOGGER.info("[{}] the hole at {} where citizens were rescued twice is left as it is — {} stands in it, with no room on its top to set it",
+                  colony.getName(), center.toShortString(), body.getName().getString());
+                return 0;
+            }
+        }
+        for (final net.minecraft.world.entity.LivingEntity body : unmoved)
+        {
+            body.stopRiding();
+            body.teleportTo(body.getX(), top + 1, body.getZ());
+            ColonyAutopilot.LOGGER.info("[{}] {} stood in the hole at {} — set on its top before it is filled",
+              colony.getName(), body.getName().getString(), center.toShortString());
+        }
+        return 1;
+    }
+
+    static boolean holeRescued(final IColony colony, final BlockPos where)
+    {
+        if (instance == null)
+        {
+            return false;
+        }
+        instance.rescuedHoles.put(where.immutable(), colony);
+        return true;
+    }
+
+    private void fillRescuedHoles()
+    {
+        final Iterator<Map.Entry<BlockPos, IColony>> due = rescuedHoles.entrySet().iterator();
+        while (due.hasNext())
+        {
+            final Map.Entry<BlockPos, IColony> rescue = due.next();
+            final BlockPos where = rescue.getKey();
+            final IColony colony = rescue.getValue();
+            if (!(colony.getWorld() instanceof ServerLevel level))
+            {
+                due.remove();
+                holesAwaiting.remove(where);
+                continue;
+            }
+            if (holesAwaiting.contains(where) && level.getGameTime() % 20 != 0)
+            {
+                continue;
+            }
+
+            if (!AutopilotConfig.live(colony, AutopilotConfig.TERRAFORM_ENABLED))
+            {
+                due.remove();
+                holesAwaiting.remove(where);
+                ProblemLedger.releaseHeld(level, where, false);
+                continue;
+            }
+            try
+            {
+
+                final Set<Long> hole = where.getY() > villageTop(colony) + 24 ? null : holeAt(level, where);
+                if (hole == null)
+                {
+                    ColonyAutopilot.LOGGER.debug("[{}] two rescues near {} — no dry hole walled in round that spot to fill (open ground or water runs on, "
+                                                   + "it passes the bound, or it lies high over the village); left to the warning", colony.getName(), where.toShortString());
+                    ProblemLedger.holeDone(level, where, Set.of(where.asLong()), false);
+                    ProblemLedger.releaseHeld(level, where, false);
+                    due.remove();
+                    holesAwaiting.remove(where);
+                    continue;
+                }
+                if (ProblemLedger.rescuesIn(level, where, hole) < 2)
+                {
+                    due.remove();
+                    holesAwaiting.remove(where);
+                    ProblemLedger.releaseHeld(level, where, false);
+                    continue;
+                }
+                final int filled = fillDeadlyDrop(level, colony, where, hole);
+                if (filled < 0)
+                {
+                    continue;
+                }
+                due.remove();
+                holesAwaiting.remove(where);
+                ProblemLedger.holeDone(level, where, hole, filled > 0);
+                ProblemLedger.releaseHeld(level, where, filled > 0);
+                final ColonyId key = ColonyAutopilot.colonyKey(colony);
+                if (filled > 0 && AutopilotConfig.live(colony, AutopilotConfig.BUILD_PATHS) && !liftedRoads.contains(key) && bootSwept.contains(key))
+                {
+                    groundReshaped(colony, new SiteSelector.Footprint(where.getX() - 4, where.getZ() - 4, where.getX() + 4, where.getZ() + 4), List.of());
+                }
+            }
+            catch (final RuntimeException e)
+            {
+                due.remove();
+                holesAwaiting.remove(where);
+                ProblemLedger.releaseHeld(level, where, false);
+                ColonyAutopilot.LOGGER.warn("[{}] the hole rule at {} failed", colony.getName(), where.toShortString(), e);
+            }
         }
     }
 
@@ -1315,12 +1905,24 @@ public class GrowthDirector
               colony.getName(), center.toShortString());
             return;
         }
-        final List<SiteSelector.Footprint> shields = untouchableGround(colony);
+
+        int minX = center.getX();
+        int minZ = center.getZ();
+        int maxX = center.getX();
+        int maxZ = center.getZ();
         for (final BlockPos pos : body)
         {
-            if (shieldedColumn(shields, pos.getX(), pos.getZ()))
+            minX = Math.min(minX, pos.getX());
+            minZ = Math.min(minZ, pos.getZ());
+            maxX = Math.max(maxX, pos.getX());
+            maxZ = Math.max(maxZ, pos.getZ());
+        }
+        final List<SiteSelector.Footprint> shields = untouchableGround(level, colony, minX, minZ, maxX, maxZ);
+        for (final BlockPos pos : body)
+        {
+            if (SiteSelector.insideAny(shields, pos.getX(), pos.getZ()))
             {
-                ColonyAutopilot.LOGGER.info("[{}] the {} at {} reaches into a building's grounds or a protected zone — left alone",
+                ColonyAutopilot.LOGGER.info("[{}] the {} at {} reaches into a building's grounds, a protected zone or another colony's land — left alone",
                   colony.getName(), lava ? "lava" : "water", center.toShortString());
                 return;
             }
@@ -1376,6 +1978,7 @@ public class GrowthDirector
         }
         BuilderCap.setOpeningBuilderHuts(openingBuilderStep == null ? 1 : openingBuilderStep.targetCount());
         pendingRoadReconnects.clear();
+        apronOwed.clear();
 
         lastPlacement.clear();
         pendingSince.clear();
@@ -1384,9 +1987,15 @@ public class GrowthDirector
         lastGateLogged.clear();
         housingHoldLogged.clear();
         unavailableHuts.clear();
+        unavailablePack.clear();
+        stableInPack.clear();
+        stableProbedAt.clear();
         plotBlockedUntil.clear();
         plotFailStrikes.clear();
+        firstStrikeRun.clear();
+        plotShortage.clear();
         fullParks.clear();
+        structuresYielded.clear();
         builderRescue.clear();
         rescueFrontier.clear();
         coldPadTries.clear();
@@ -1397,10 +2006,13 @@ public class GrowthDirector
         stairRefused.clear();
         stairLonger.clear();
         walkRefused.clear();
-        rescueRefusedAt.clear();
+        rescueRefused.clear();
+        importantCallUnanswered.clear();
+        walkPlacedLast.clear();
         reconnectLater.clear();
         requeuedAt.clear();
         deadRoads.clear();
+        orphanRoads.clear();
         liftedRoads.clear();
         relaidAt.clear();
         lastBreak.clear();
@@ -1414,9 +2026,13 @@ public class GrowthDirector
         pondTended.clear();
         FishingPond.clearThawScans();
         PlantationFields.clearDesigns();
+        ForesterGrove.clearGroundWarnings();
+        Paddocks.mostStrays.clear();
+        Paddocks.bardingWaits.clear();
         ravineChecked.clear();
         roadsAwaitingGrade.clear();
         groundsSweeps.clear();
+        sweepOwed.clear();
         ravineSurveys.clear();
         jobWatch.clear();
         lavaDeathSpots.clear();
@@ -1429,6 +2045,7 @@ public class GrowthDirector
         anticipationConversion.clear();
         BuilderCap.clear();
         townHallAproned.clear();
+        apronRetries.clear();
         offsetLearning.clear();
         offsetMisses.clear();
         ColonySettings.invalidateAll();
@@ -1459,7 +2076,11 @@ public class GrowthDirector
         pendingRoadReconnects.clear();
         reconnectLater.clear();
         apronOwed.clear();
+        rescuedHoles.clear();
+        holesAwaiting.clear();
+        groundsSweeps.values().forEach(VillageGrounds::reportNotches);
         groundsSweeps.clear();
+        sweepOwed.clear();
         ravineSurveys.clear();
     }
 
@@ -1480,19 +2101,36 @@ public class GrowthDirector
         {
             drainRoadReconnects();
         }
+        if (!rescuedHoles.isEmpty())
+        {
+            fillRescuedHoles();
+        }
         if (!groundsSweeps.isEmpty())
         {
 
-            groundsSweeps.entrySet().removeIf(entry -> !AutopilotConfig.get(entry.getValue().colony, AutopilotConfig.TERRAFORM_ENABLED));
+            groundsSweeps.entrySet().removeIf(entry -> {
+                final boolean off = !AutopilotConfig.get(entry.getValue().colony, AutopilotConfig.TERRAFORM_ENABLED);
+                if (off)
+                {
+                    VillageGrounds.reportNotches(entry.getValue());
+                }
+                return off;
+            });
         }
         if (!groundsSweeps.isEmpty())
         {
             final Iterator<Map.Entry<ColonyId, VillageGrounds.Sweep>> sweeps = groundsSweeps.entrySet().iterator();
             while (sweeps.hasNext())
             {
+                final VillageGrounds.Sweep sweep = sweeps.next().getValue();
+
+                if (AutopilotConfig.get(sweep.colony, AutopilotConfig.KEEP_VILLAGE_LOADED) && !ChunkKeeper.holds(sweep.colony))
+                {
+                    continue;
+                }
                 try
                 {
-                    if (VillageGrounds.drain(sweeps.next().getValue()))
+                    if (VillageGrounds.drain(sweep))
                     {
                         sweeps.remove();
                     }
@@ -1501,6 +2139,7 @@ public class GrowthDirector
                 {
                     sweeps.remove();
                     ColonyAutopilot.LOGGER.warn("Village grounds sweep failed", e);
+                    VillageGrounds.reportNotches(sweep);
                 }
             }
         }
@@ -1568,10 +2207,17 @@ public class GrowthDirector
         }
         for (final IColony colony : IColonyManager.getInstance().getAllColonies())
         {
-            if (!guardStaffingLive(colony))
+            try
             {
+                if (!guardStaffingLive(colony))
+                {
 
-                releaseHeldGuardPosts(colony);
+                    releaseHeldGuardPosts(colony);
+                }
+            }
+            catch (final Exception e)
+            {
+                ColonyAutopilot.LOGGER.warn("Releasing held guard posts failed for colony {}", colony.getName(), e);
             }
         }
 
@@ -1597,8 +2243,9 @@ public class GrowthDirector
 
     private void pruneColonyState(final Set<ColonyId> live, final MinecraftServer server)
     {
-        ColonyAutopilot.retainColonies(live, lastPlacement, pendingSince, reservedPlots, blockedUntil, lastGateLogged, housingHoldLogged, unavailableHuts, plotBlockedUntil, plotFailStrikes, fullParks, builderRescue, rescueFrontier, coldPadTries, universityWidened, lastTerraform, terraformAnchors, stairRefused, stairLonger, walkRefused, rescueRefusedAt, requeuedAt, deadRoads, lastBreak, researchLockLogged, roadLedger, pondTended, ravineChecked, roadsAwaitingGrade, groundsSweeps, ravineSurveys, jobWatch.state(), lavaDeathSpots, drownDeathSpots, fallDeathSpots, lastGuardBalance, guardTowersSeen, graveyardShellWarned, barracksForDruidsAt, anticipationConversion, BuilderCap.placementWantedAt, BuilderCap.placementAdmittedAt, BuilderCap.placementHeld, BuilderCap.upgradeHeld, BuilderCap.quotaWaivedLogged);
+        ColonyAutopilot.retainColonies(live, lastPlacement, pendingSince, reservedPlots, blockedUntil, lastGateLogged, housingHoldLogged, unavailableHuts, unavailablePack, plotBlockedUntil, plotFailStrikes, firstStrikeRun, plotShortage, fullParks, structuresYielded, builderRescue, rescueFrontier, coldPadTries, universityWidened, lastTerraform, terraformAnchors, stairRefused, stairLonger, walkRefused, rescueRefused, importantCallUnanswered, walkPlacedLast, requeuedAt, deadRoads, orphanRoads, lastBreak, researchLockLogged, roadLedger, pondTended, ravineChecked, roadsAwaitingGrade, groundsSweeps, ravineSurveys, jobWatch.state(), lavaDeathSpots, drownDeathSpots, fallDeathSpots, lastGuardBalance, guardTowersSeen, graveyardShellWarned, barracksForDruidsAt, anticipationConversion, BuilderCap.placementWantedAt, BuilderCap.placementAdmittedAt, BuilderCap.placementHeld, BuilderCap.upgradeHeld, BuilderCap.quotaWaivedLogged, Paddocks.mostStrays, Paddocks.bardingWaits);
         bootSwept.retainAll(live);
+        sweepOwed.retainAll(live);
         bootDelay.keySet().retainAll(live);
         bootPass.keySet().retainAll(live);
         bootChanged.retainAll(live);
@@ -1606,11 +2253,13 @@ public class GrowthDirector
         relaidAt.keySet().retainAll(live);
         roadsLoaded.retainAll(live);
         townHallAproned.keySet().retainAll(live);
+        apronRetries.keySet().retainAll(live);
 
         for (final ServerLevel level : server.getAllLevels())
         {
             final Set<Integer> ids = new HashSet<>();
             final ColonyGrounds grounds = ColonyGrounds.get(level);
+            final Set<Long> standing = new HashSet<>();
             for (final IColony colony : IColonyManager.getInstance().getColonies(level))
             {
                 if (!live.contains(ColonyAutopilot.colonyKey(colony)))
@@ -1624,6 +2273,7 @@ public class GrowthDirector
                     anchors.add(anchor.asLong());
                 }
                 grounds.retainAnchors(colony.getID(), anchors);
+                standing.addAll(anchors);
                 final Set<Long> scarecrows = new HashSet<>();
                 for (final IBuildingExtension extension : colony.getServerBuildingManager().getBuildingExtensions(ext ->
                   ext.getBuildingExtensionType().equals(BuildingExtensionRegistries.farmField.get())))
@@ -1632,6 +2282,9 @@ public class GrowthDirector
                 }
                 grounds.retainFields(colony.getID(), scarecrows);
             }
+
+            offsetLearning.keySet().removeIf(pos -> pos.dimension().equals(level.dimension()) && !standing.contains(pos.pos().asLong()));
+            offsetMisses.keySet().removeIf(pos -> pos.dimension().equals(level.dimension()) && !standing.contains(pos.pos().asLong()));
             grounds.retain(ids);
             ProtectedZones.get(level).retain(ids);
         }
@@ -1646,11 +2299,14 @@ public class GrowthDirector
         }
         ColonyGrounds.get(level).forget(colony.getID());
         ProtectedZones.get(level).forget(colony.getID());
+        WorldStructures.forget(colony);
         ColonySettings.invalidate(colony);
         Treasury.forget(colony);
         Milestones.forget(colony);
 
         pendingRoadReconnects.removeIf(building -> building.getColony() == colony);
+
+        apronOwed.removeIf(building -> building.getColony() == colony);
         final Set<ColonyId> live = new HashSet<>();
         for (final IColony other : IColonyManager.getInstance().getAllColonies())
         {
@@ -1697,7 +2353,11 @@ public class GrowthDirector
             }
             else
             {
-                townHallAproned.put(key, hall.getPosition());
+
+                if (townHallAproned.put(key, hall.getPosition()) != null)
+                {
+                    apronRetries.remove(key);
+                }
                 final List<SiteSelector.Footprint> others = new ArrayList<>(sacredGround(colony));
                 for (final IBuilding other : colony.getServerBuildingManager().getBuildings().values())
                 {
@@ -1716,9 +2376,17 @@ public class GrowthDirector
                 }
                 if (skirt.total() > 0)
                 {
-                    ColonyAutopilot.LOGGER.info("[{}] smoothed {} blocks around the town hall's plot ({} graded, {} re-grassed) — the founder's own hut gets its apron too{}",
-                      colony.getName(), skirt.total(), skirt.graded(), skirt.recapped(),
-                      converged ? "; at grade now, that was the last pass" : "");
+
+                    final String line = "[{}] smoothed {} blocks around the town hall's plot ({} graded, {} re-grassed) — the founder's own hut gets its apron too{}";
+                    final String end = converged ? "; at grade now, that was the last pass" : "";
+                    if (apronRetries.getOrDefault(key, 0) > 0)
+                    {
+                        ColonyAutopilot.LOGGER.debug(line, colony.getName(), skirt.total(), skirt.graded(), skirt.recapped(), end);
+                    }
+                    else
+                    {
+                        ColonyAutopilot.LOGGER.info(line, colony.getName(), skirt.total(), skirt.graded(), skirt.recapped(), end);
+                    }
                 }
             }
         }
@@ -1752,8 +2420,9 @@ public class GrowthDirector
                 for (final Map.Entry<BlockPos, List<BlockPos>> gone : orphaned.entrySet())
                 {
 
-                    final List<BlockPos> left = VillagePaths.erase(level, gone.getValue(), liveBlocks, Set.of());
+                    final List<BlockPos> left = VillagePaths.erase(level, gone.getValue(), liveBlocks, Set.of(), ColonyGrounds.get(level).roadWater(colony.getID()));
                     lifted |= left.size() != gone.getValue().size();
+                    ColonyGrounds.get(level).setRoadLine(colony.getID(), gone.getKey(), null);
 
                     final Set<BlockPos> stillStanding = new HashSet<>(left);
                     final List<BlockPos> erased = new ArrayList<>();
@@ -1837,7 +2506,7 @@ public class GrowthDirector
 
             ColonyAutopilot.LOGGER.info("[{}] day report: {} of {} citizens, {} job slots, {} open work orders, {} arrows fired in training, {} visitors greeted, {} items paid from the treasury",
               colony.getName(), colony.getCitizenManager().getCurrentCitizenCount(),
-              colony.getCitizenManager().getMaxCitizens(), totalJobSlots(colony), colony.getWorkManager().getWorkOrders().size(), arrows, visitors,
+              beds(colony), totalJobSlots(colony), colony.getWorkManager().getWorkOrders().size(), arrows, visitors,
               Treasury.takeSpentToday(colony));
 
             if (AutopilotConfig.get(colony, AutopilotConfig.BUILD_PATHS) && !liftedRoads.contains(key))
@@ -1870,6 +2539,13 @@ public class GrowthDirector
                     }
 
                     if (building instanceof BuildingFarmer || building instanceof BuildingPlantation)
+                    {
+                        outfitWorkplace(building);
+                    }
+
+                    else if (building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutGraveyard
+                               && building.getModule(WorkerBuildingModule.class) instanceof WorkerBuildingModule crew
+                               && crew.getHiringMode() == (AutopilotConfig.live(colony, AutopilotConfig.NO_GRAVES) ? HiringMode.DEFAULT : HiringMode.LOCKED))
                     {
                         outfitWorkplace(building);
                     }
@@ -1919,13 +2595,17 @@ public class GrowthDirector
                 ColonyAutopilot.LOGGER.warn("[{}] the trainee promotion round failed", colony.getName(), e);
             }
 
+            if (hall != null && hall.getPosition().equals(townHallAproned.get(key))
+                  && ColonyGrounds.get(level).hasAnchorOffset(colony.getID(), hall.getPosition())
+                  && !ColonyGrounds.get(level).isApronDone(colony.getID(), hall.getPosition())
+                  && apronRetries.merge(key, 1, Integer::sum) <= APRON_RETRIES)
+            {
+                townHallAproned.remove(key);
+            }
+
             if (AutopilotConfig.get(colony, AutopilotConfig.TERRAFORM_ENABLED) && !groundsSweeps.containsKey(key))
             {
-                final VillageGrounds.Sweep sweep = VillageGrounds.plan(colony, sacredGround(colony));
-                if (sweep != null)
-                {
-                    groundsSweeps.put(key, sweep);
-                }
+                sweepOwed.add(key);
             }
         }
 
@@ -1947,12 +2627,35 @@ public class GrowthDirector
             continueRoadPasses(colony, key);
         }
 
+        if (sweepOwed.contains(key)
+              && (ChunkKeeper.holds(colony) || !AutopilotConfig.get(colony, AutopilotConfig.KEEP_VILLAGE_LOADED))
+              && bootSwept.contains(key) && !bootPass.containsKey(key)
+              && pendingRoadReconnects.stream().noneMatch(building -> building.getColony() == colony)
+              && reconnectLater.stream().noneMatch(building -> building.getColony() == colony))
+        {
+            sweepOwed.remove(key);
+
+            if (AutopilotConfig.get(colony, AutopilotConfig.TERRAFORM_ENABLED))
+            {
+                final VillageGrounds.Sweep sweep = VillageGrounds.plan(colony, sacredGround(colony), roadBand(colony, level));
+                if (sweep != null)
+                {
+                    groundsSweeps.put(key, sweep);
+                }
+            }
+        }
+
         final Long pending = pendingSince.get(key);
         if (pending != null && now - pending < 2400)
         {
             return;
         }
         pendingSince.remove(key);
+
+        if (!colony.getStructurePack().equals(unavailablePack.put(key, colony.getStructurePack())))
+        {
+            unavailableHuts.remove(key);
+        }
 
         final Long blocked = blockedUntil.get(key);
         if (blocked != null && now < blocked)
@@ -2004,19 +2707,9 @@ public class GrowthDirector
         final Map<Block, Long> plotBlocked = plotBlockedUntil.getOrDefault(key, Map.of());
 
         final List<ResolvedStep> walk = planFor(colony);
-        boolean openingReachable = openingBuilderStep != null;
-        for (int i = 0; openingReachable && walk.get(i) != openingBuilderStep; i++)
-        {
-            final ResolvedStep earlier = walk.get(i);
-            final Long earlierRetry = plotBlocked.get(earlier.hut());
-            final int earlierStanding = countByHut.getOrDefault(earlier.hut(), 0)
-              + (earlier.hut() == ModBlocks.blockHutGuardTower ? countByHut.getOrDefault(ModBlocks.blockHutBarracks, 0) : 0);
-            openingReachable = earlier.targetLevel() > 0
-              ? maxLevelByHut.getOrDefault(earlier.hut(), 0) >= earlier.targetLevel()
-              : earlier.hut() == ModBlocks.blockHutTownHall || citizens >= earlier.minCitizens() || earlierStanding >= earlier.targetCount()
-                  || unavailable.contains(earlier.hut()) || (earlierRetry != null && now < earlierRetry)
-                  || (earlier.hut() == ModBlocks.blockHutGraveyard && AutopilotConfig.live(colony, AutopilotConfig.NO_GRAVES));
-        }
+
+        final boolean openingReachable = openingBuilderStep != null
+              && walkReaches(colony, walk, openingBuilderStep, unavailable, plotBlocked, countByHut, maxLevelByHut, citizens, now, false);
         final Long openingRetry = plotBlocked.get(ModBlocks.blockHutBuilder);
         final boolean openingBuildersDue = openingReachable && AutopilotConfig.get(colony, AutopilotConfig.EXPANSION_ENABLED)
               && countByHut.getOrDefault(ModBlocks.blockHutBuilder, 0) < openingBuilderStep.targetCount()
@@ -2024,8 +2717,173 @@ public class GrowthDirector
               && !unavailable.contains(ModBlocks.blockHutBuilder) && (openingRetry == null || now >= openingRetry)
               && (citizens < census.getMaxCitizens() || census.getJoblessCitizen() != null);
 
+        if (!AutopilotConfig.get(colony, AutopilotConfig.EXPANSION_ENABLED))
+        {
+            return;
+        }
+
+        final Rescue stranded = builderRescue.get(key);
+        boolean builderPending = false;
+        for (final IBuilding building : buildings)
+        {
+            if (building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutBuilder && building.getBuildingLevel() == 0)
+            {
+                builderPending = true;
+                break;
+            }
+        }
+        final int builderHuts = countByHut.getOrDefault(ModBlocks.blockHutBuilder, 0);
+        final Long builderRetry = plotBlocked.get(ModBlocks.blockHutBuilder);
+        final boolean builderPlaceable = !builderPending && !unavailable.contains(ModBlocks.blockHutBuilder)
+              && (builderRetry == null || now >= builderRetry);
+
+        IBuilding covering = null;
+        if (stranded != null)
+        {
+            for (final IBuilding building : buildings)
+            {
+                if (building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutBuilder
+                      && building.getPosition().distSqr(stranded.frontier()) <= SiteSelector.BUILDER_RANGE_SQ
+                      && (covering == null || !building.getAllAssignedCitizen().isEmpty()))
+                {
+                    covering = building;
+                    if (!building.getAllAssignedCitizen().isEmpty())
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+
+        final Long strandedRetry = stranded == null ? null : plotBlocked.get(stranded.hut());
+        final boolean strandedParked = strandedRetry != null && now < strandedRetry;
+        if (covering != null && importantHut(stranded.hut()) && covering.getAllAssignedCitizen().isEmpty() && covering.getBuildingLevel() == 0 && strandedParked
+              && (citizens < census.getMaxCitizens() || census.getJoblessCitizen() != null))
+        {
+
+        }
+        else if (covering != null && importantHut(stranded.hut()) && covering.getAllAssignedCitizen().isEmpty())
+        {
+
+            builderRescue.remove(key);
+            rescueRefused.putIfAbsent(key, new HashSet<>());
+            rescueRefused.get(key).add(stranded.hut());
+            plotFreed(key, stranded.hut());
+            ColonyAutopilot.LOGGER.info("[{}] the {}'s land lies by the builder's hut at {}, which has no crew — the {} does not wait for one and {}",
+              colony.getName(), stranded.stepName(), covering.getPosition().toShortString(), stranded.stepName(), afterRefusedRescue(colony));
+        }
+        else if (covering != null && importantHut(stranded.hut()))
+        {
+
+            if (strandedParked)
+            {
+                plotFreed(key, stranded.hut());
+                ColonyAutopilot.LOGGER.info("[{}] the {} is within reach of the builder's hut at {}, which has its crew — it is searched again at the next turn",
+                  colony.getName(), stranded.stepName(), covering.getPosition().toShortString());
+            }
+        }
+        else if (covering != null)
+        {
+            builderRescue.remove(key);
+            ColonyAutopilot.LOGGER.info(covering.getAllAssignedCitizen().isEmpty()
+                ? "[{}] the {} waits on the builder's hut at {}, which covers its land but has no crew — it needs a builder, not another hut"
+                : "[{}] the {} is within reach of the builder's hut at {}, which has its crew again — no other hut needed",
+              colony.getName(), stranded.stepName(), covering.getPosition().toShortString());
+        }
+        else if (stranded != null && !builderPending && builderHuts >= MAX_RESCUE_BUILDER_HUTS)
+        {
+            builderRescue.remove(key);
+
+            rescueRefused.computeIfAbsent(key, k -> new HashSet<>()).add(stranded.hut());
+            if (importantHut(stranded.hut()))
+            {
+                plotFreed(key, stranded.hut());
+            }
+            ColonyAutopilot.LOGGER.warn("[{}] the frontier outgrew every builder's reach but the village already keeps {} builders' huts — no more are raised, and the {} {}",
+              colony.getName(), builderHuts, stranded.stepName(), afterRefusedRescue(colony));
+        }
+        else if (stranded != null && builderPlaceable && citizens >= census.getMaxCitizens() && census.getJoblessCitizen() == null)
+        {
+
+            builderRescue.remove(key);
+            rescueRefused.computeIfAbsent(key, k -> new HashSet<>()).add(stranded.hut());
+            if (importantHut(stranded.hut()))
+            {
+                plotFreed(key, stranded.hut());
+            }
+            ColonyAutopilot.LOGGER.info("[{}] no citizen is free to crew a builder's hut toward the {}'s land (the village is at its citizen ceiling and everyone has a job) — none is raised, and the {} {}",
+              colony.getName(), stranded.stepName(), stranded.stepName(), afterRefusedRescue(colony));
+        }
+        else if (stranded != null && builderPlaceable && !BuilderCap.mayPlace(colony, level, ModBlocks.blockHutBuilder))
+        {
+
+        }
+        else if (stranded != null && builderPlaceable)
+        {
+            ColonyAutopilot.LOGGER.info("[{}] raising builder's hut #{} toward {} — the {} found land beyond every crew's reach",
+              colony.getName(), builderHuts + 1, stranded.frontier().toShortString(), stranded.stepName());
+            rescueFrontier.put(key, new StagedFrontier(stranded.frontier(), now + 2400));
+            beginPlacement(colony, level, new ResolvedStep(ModBlocks.blockHutBuilder, "Builder's Hut", 0, 0), ModBlocks.blockHutBuilder);
+            return;
+        }
+        else if (stranded != null && (builderPending || unavailable.contains(ModBlocks.blockHutBuilder)))
+        {
+            builderRescue.remove(key);
+            if (importantHut(stranded.hut()))
+            {
+
+                rescueRefused.putIfAbsent(key, new HashSet<>());
+                rescueRefused.get(key).add(stranded.hut());
+                plotFreed(key, stranded.hut());
+            }
+        }
+
+        boolean importantDue = false;
+
+        boolean importantWaiting = false;
+
+        boolean recordWanted = stranded == null || !importantHut(stranded.hut());
+        final Long importantCallAt = importantCallUnanswered.get(key);
+        final boolean importantAsked = countByHut.getOrDefault(ModBlocks.blockHutTownHall, 0) > 0
+              && (importantCallAt == null || now - importantCallAt >= 2400) && AutopilotConfig.get(colony, AutopilotConfig.EXPANSION_ENABLED);
+        for (final ResolvedStep planned : walk)
+        {
+            final Block stepHut = planned.hut();
+            if (!importantHut(stepHut) || planned.targetLevel() > 0 || countByHut.getOrDefault(stepHut, 0) >= planned.targetCount()
+                  || unavailable.contains(stepHut))
+            {
+                continue;
+            }
+            if (stranded != null && stepHut == stranded.hut())
+            {
+                recordWanted = true;
+            }
+            if (importantWaiting || !importantAsked || citizens < planned.minCitizens() || !hutUnlocked(colony, stepHut))
+            {
+                continue;
+            }
+            final Long stepRetry = plotBlocked.get(stepHut);
+            if ((stepRetry == null || now >= stepRetry || (terraformer != null && terraformer.cuttingPadFor(colony, stepHut)))
+                  && walkReaches(colony, walk, planned, unavailable, plotBlocked, countByHut, maxLevelByHut, citizens, now, false)
+                  && (stepHut != ModBlocks.blockHutStable || Boolean.TRUE.equals(shipsStable(colony))))
+            {
+
+                importantWaiting = true;
+                importantDue = walkReaches(colony, walk, planned, unavailable, plotBlocked, countByHut, maxLevelByHut, citizens, now, true);
+            }
+        }
+        if (!recordWanted && builderRescue.get(key) == stranded)
+        {
+            builderRescue.remove(key);
+            ColonyAutopilot.LOGGER.debug("[{}] the {}'s rescue is dropped: no step of the plan waits for one any more — its land is free again",
+              colony.getName(), stranded.stepName());
+        }
+
         final Long towerRetry = plotBlocked.get(ModBlocks.blockHutGuardTower);
-        if (!openingBuildersDue && !unavailable.contains(ModBlocks.blockHutGuardTower) && (towerRetry == null || now >= towerRetry))
+        final boolean noGuardPost = countByHut.getOrDefault(ModBlocks.blockHutGuardTower, 0) + countByHut.getOrDefault(ModBlocks.blockHutBarracks, 0) == 0;
+
+        final boolean walksTurn = importantWaiting && !walkPlacedLast.containsKey(key);
+        if (!openingBuildersDue && ((!importantDue && !walksTurn) || noGuardPost) && !unavailable.contains(ModBlocks.blockHutGuardTower) && (towerRetry == null || now >= towerRetry))
         {
             int unguarded = 0;
             int guardPosts = 0;
@@ -2054,6 +2912,7 @@ public class GrowthDirector
                 if (barracksDue(colony, countByHut, unavailable) && (barracksRetry == null || now >= barracksRetry)
                       && BuilderCap.mayPlace(colony, level, ModBlocks.blockHutBarracks))
                 {
+                    walkPlacedLast.remove(key);
                     beginPlacement(colony, level, new ResolvedStep(ModBlocks.blockHutBarracks, "Barracks", 0, 0), ModBlocks.blockHutBarracks);
                     return;
                 }
@@ -2061,15 +2920,11 @@ public class GrowthDirector
                 if (countByHut.getOrDefault(ModBlocks.blockHutGuardTower, 0) < AutopilotConfig.get(colony, AutopilotConfig.GUARD_TOWER_CAP)
                       && BuilderCap.mayPlace(colony, level, ModBlocks.blockHutGuardTower))
                 {
+                    walkPlacedLast.remove(key);
                     beginPlacement(colony, level, new ResolvedStep(ModBlocks.blockHutGuardTower, "Guard Tower", 0, 0), ModBlocks.blockHutGuardTower);
                     return;
                 }
             }
-        }
-
-        if (!AutopilotConfig.get(colony, AutopilotConfig.EXPANSION_ENABLED))
-        {
-            return;
         }
 
         if (upgrades != null && bedCapped)
@@ -2100,71 +2955,16 @@ public class GrowthDirector
             }
         }
 
-        final Rescue stranded = builderRescue.get(key);
-        boolean builderPending = false;
-        for (final IBuilding building : buildings)
-        {
-            if (building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutBuilder && building.getBuildingLevel() == 0)
-            {
-                builderPending = true;
-                break;
-            }
-        }
-        final int builderHuts = countByHut.getOrDefault(ModBlocks.blockHutBuilder, 0);
-        final Long builderRetry = plotBlocked.get(ModBlocks.blockHutBuilder);
-        final boolean builderPlaceable = !builderPending && !unavailable.contains(ModBlocks.blockHutBuilder)
-              && (builderRetry == null || now >= builderRetry);
+        if (stranded == null && !importantDue && !walksTurn && builderPlaceable && builderHuts >= 2 && builderHuts < Math.min(MAX_BUILDER_HUTS, 2 + builtCount / BUILDINGS_PER_CREW)
 
-        IBuilding covering = null;
-        if (stranded != null)
-        {
-            for (final IBuilding building : buildings)
-            {
-                if (building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutBuilder
-                      && building.getPosition().distSqr(stranded.frontier()) <= SiteSelector.BUILDER_RANGE_SQ)
-                {
-                    covering = building;
-                    break;
-                }
-            }
-        }
-        if (covering != null)
-        {
-            builderRescue.remove(key);
-            ColonyAutopilot.LOGGER.info(covering.getAllAssignedCitizen().isEmpty()
-                ? "[{}] the {} waits on the builder's hut at {}, which covers its land but has no crew — it needs a builder, not another hut"
-                : "[{}] the {} is within reach of the builder's hut at {}, which has its crew again — no other hut needed",
-              colony.getName(), stranded.stepName(), covering.getPosition().toShortString());
-        }
-        else if (stranded != null && !builderPending && builderHuts >= MAX_RESCUE_BUILDER_HUTS)
-        {
-            builderRescue.remove(key);
-            ColonyAutopilot.LOGGER.warn("[{}] the frontier outgrew every builder's reach but the village already keeps {} builders' huts — the {} stays parked",
-              colony.getName(), builderHuts, stranded.stepName());
-        }
-        else if (stranded != null && builderPlaceable && !BuilderCap.mayPlace(colony, level, ModBlocks.blockHutBuilder))
-        {
-
-        }
-        else if (stranded != null && builderPlaceable)
-        {
-            ColonyAutopilot.LOGGER.info("[{}] raising builder's hut #{} toward {} — the {} found land beyond every crew's reach",
-              colony.getName(), builderHuts + 1, stranded.frontier().toShortString(), stranded.stepName());
-            rescueFrontier.put(key, new StagedFrontier(stranded.frontier(), now + 2400));
-            beginPlacement(colony, level, new ResolvedStep(ModBlocks.blockHutBuilder, "Builder's Hut", 0, 0), ModBlocks.blockHutBuilder);
-            return;
-        }
-        else if (stranded != null && (builderPending || unavailable.contains(ModBlocks.blockHutBuilder)))
-        {
-            builderRescue.remove(key);
-        }
-        else if (builderPlaceable && builderHuts >= 2 && builderHuts < Math.min(MAX_BUILDER_HUTS, 2 + builtCount / BUILDINGS_PER_CREW)
+              && (citizens < census.getMaxCitizens() || census.getJoblessCitizen() != null)
               && BuilderCap.mayPlace(colony, level, ModBlocks.blockHutBuilder))
         {
             ColonyAutopilot.LOGGER.info("[{}] raising builder's hut #{} — {} buildings outgrew {} crews",
               colony.getName(), builderHuts + 1, builtCount, builderHuts);
 
             rescueFrontier.remove(key);
+            walkPlacedLast.remove(key);
             beginPlacement(colony, level, new ResolvedStep(ModBlocks.blockHutBuilder, "Builder's Hut", 0, 0), ModBlocks.blockHutBuilder);
             return;
         }
@@ -2176,7 +2976,8 @@ public class GrowthDirector
 
             if (planned.targetLevel() > 0)
             {
-                if (maxLevelByHut.getOrDefault(hutBlock, 0) >= planned.targetLevel())
+
+                if (unavailable.contains(hutBlock) || maxLevelByHut.getOrDefault(hutBlock, 0) >= planned.targetLevel())
                 {
                     continue;
                 }
@@ -2236,6 +3037,11 @@ public class GrowthDirector
             final Long retryAt = plotBlocked.get(hutBlock);
             if (retryAt != null && now < retryAt)
             {
+
+                if (importantHut(hutBlock) && terraformer != null && terraformer.cuttingPadFor(colony, hutBlock))
+                {
+                    return;
+                }
                 continue;
             }
             final int standing = countByHut.getOrDefault(planned.hut(), 0)
@@ -2243,6 +3049,22 @@ public class GrowthDirector
             if (standing >= planned.targetCount())
             {
                 continue;
+            }
+
+            if (hutBlock == ModBlocks.blockHutStable)
+            {
+                final Boolean shipped = shipsStable(colony);
+                if (shipped == null)
+                {
+                    continue;
+                }
+                if (!shipped)
+                {
+                    ColonyAutopilot.LOGGER.info("[{}] pack '{}' has no Stable to build from — the village builds none itself (not every style pack ships one); one of another style can be placed by hand once Mounted Combat is researched",
+                      colony.getName(), colony.getStructurePack());
+                    unavailableHuts.computeIfAbsent(key, k -> new HashSet<>()).add(hutBlock);
+                    continue;
+                }
             }
 
             if (citizens < step.minCitizens())
@@ -2280,15 +3102,23 @@ public class GrowthDirector
                 continue;
             }
 
-            if (hutBlock != ModBlocks.blockHutHome && hutBlock != ModBlocks.blockHutTownHall
-                  && hutBlock != ModBlocks.blockHutTavern && hutBlock != ModBlocks.blockHutUniversity
+            if (hutBlock != ModBlocks.blockHutHome && hutBlock != ModBlocks.blockHutTownHall && !importantHut(hutBlock)
                   && citizens >= colony.getCitizenManager().getMaxCitizens()
                   && colony.getCitizenManager().getJoblessCitizen() == null)
             {
                 continue;
             }
 
+            if (importantHut(hutBlock) || importantWaiting)
+            {
+                importantCallUnanswered.put(key, now);
+            }
             beginPlacement(colony, level, step, hutBlock);
+
+            if (pendingSince.containsKey(key))
+            {
+                walkPlacedLast.put(key, now);
+            }
             return;
         }
 
@@ -2297,7 +3127,7 @@ public class GrowthDirector
             return;
         }
 
-        if (AutopilotConfig.get(colony, AutopilotConfig.UPGRADES_BEFORE_EXPANSION))
+        if (AutopilotConfig.get(colony, AutopilotConfig.UPGRADES_BEFORE_EXPANSION) && AutopilotConfig.upgradesBuildings(colony))
         {
             for (final IBuilding building : buildings)
             {
@@ -2370,24 +3200,74 @@ public class GrowthDirector
         }
     }
 
+    private String afterRefusedRescue(final IColony colony)
+    {
+        return AutopilotConfig.get(colony, AutopilotConfig.TERRAFORM_ENABLED) && terraformer != null
+                 ? "takes the terraformer's ladder instead" : "keeps retrying its own search";
+    }
+
     private static boolean barracksDue(final IColony colony, final Map<Block, Integer> countByHut, final Set<Block> unavailable)
     {
         if (countByHut.getOrDefault(ModBlocks.blockHutBarracks, 0) > 0 || unavailable.contains(ModBlocks.blockHutBarracks))
         {
             return false;
         }
-        final ResourceLocation research = colony.getResearchManager().getResearchEffectIdFrom(ModBlocks.blockHutBarracks);
+        return hutUnlocked(colony, ModBlocks.blockHutBarracks);
+    }
+
+    private static boolean importantHut(final Block hut)
+    {
+        return hut == ModBlocks.blockHutTavern || hut == ModBlocks.blockHutWareHouse || hut == ModBlocks.blockHutBlacksmith
+                 || hut == ModBlocks.blockHutCook || hut == ModBlocks.blockHutUniversity || hut == ModBlocks.blockHutStable
+                 || hut == ModBlocks.blockHutLibrary || hut == ModBlocks.blockHutHospital;
+    }
+
+    private static boolean hutUnlocked(final IColony colony, final Block hut)
+    {
+        final ResourceLocation research = colony.getResearchManager().getResearchEffectIdFrom(hut);
         return !MinecoloniesAPIProxy.getInstance().getGlobalResearchTree().hasResearchEffect(research)
                  || colony.getResearchManager().getResearchEffects().getEffectStrength(research) >= 1;
     }
 
-    private record Design(boolean invisible, int tier, boolean mapped, String path, Blueprint blueprint) implements Comparable<Design>
+    private static boolean walkReaches(final IColony colony, final List<ResolvedStep> walk, final ResolvedStep target, final Set<Block> unavailable,
+      final Map<Block, Long> plotBlocked, final Map<Block, Integer> countByHut, final Map<Block, Integer> maxLevelByHut, final int citizens, final long now,
+      final boolean nextUp)
+    {
+        for (int i = 0; walk.get(i) != target; i++)
+        {
+            final ResolvedStep earlier = walk.get(i);
+            final Long earlierRetry = plotBlocked.get(earlier.hut());
+            final int earlierStanding = countByHut.getOrDefault(earlier.hut(), 0)
+              + (earlier.hut() == ModBlocks.blockHutGuardTower ? countByHut.getOrDefault(ModBlocks.blockHutBarracks, 0) : 0);
+            if (!(unavailable.contains(earlier.hut()) || (earlier.targetLevel() > 0
+              ? maxLevelByHut.getOrDefault(earlier.hut(), 0) >= earlier.targetLevel()
+              : earlier.hut() == ModBlocks.blockHutTownHall || citizens >= earlier.minCitizens() || earlierStanding >= earlier.targetCount()
+                  || (earlierRetry != null && now < earlierRetry)
+                  || (earlier.hut() == ModBlocks.blockHutGraveyard && AutopilotConfig.live(colony, AutopilotConfig.NO_GRAVES)))))
+            {
+                return false;
+            }
+
+            if (nextUp && earlier.targetLevel() == 0 && earlier.hut() != ModBlocks.blockHutTownHall && earlier.hut() != ModBlocks.blockHutHome
+                  && earlier.hut() != ModBlocks.blockHutGuardTower && earlier.hut() != ModBlocks.blockHutStable && !unavailable.contains(earlier.hut())
+                  && earlierStanding < earlier.targetCount() && (earlierRetry == null || now >= earlierRetry)
+                  && !(earlier.hut() == ModBlocks.blockHutGraveyard && AutopilotConfig.live(colony, AutopilotConfig.NO_GRAVES))
+                  && hutUnlocked(colony, earlier.hut())
+                  && (importantHut(earlier.hut()) || citizens < colony.getCitizenManager().getMaxCitizens()
+                        || colony.getCitizenManager().getJoblessCitizen() != null))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private record Design(int tier, boolean mapped, String path, java.nio.file.Path file) implements Comparable<Design>
     {
         @Override
         public int compareTo(final Design other)
         {
-            int order = Boolean.compare(invisible, other.invisible);
-            order = order != 0 ? order : Integer.compare(tier, other.tier);
+            int order = Integer.compare(tier, other.tier);
             order = order != 0 ? order : Boolean.compare(other.mapped, mapped);
             order = order != 0 ? order : Boolean.compare(other.path.contains("/default/"), path.contains("/default/"));
             order = order != 0 ? order : Integer.compare(path.length(), other.path.length());
@@ -2395,8 +3275,71 @@ public class GrowthDirector
         }
     }
 
+    private static Blueprint findDesign(final String packName, final Block hutBlock, final String hutName, final String mappedFile,
+      final HolderLookup.Provider registries)
+    {
+        final StructurePackMeta pack = StructurePacks.waitUntilFinishedLoading() ? StructurePacks.getStructurePack(packName) : null;
+        if (pack == null)
+        {
+            return null;
+        }
+
+        final List<Design> order = new ArrayList<>();
+        final java.util.ArrayDeque<java.nio.file.Path> folders = new java.util.ArrayDeque<>(List.of(pack.getPath()));
+        while (!folders.isEmpty())
+        {
+            final java.nio.file.Path folder = folders.pop();
+            try (java.util.stream.Stream<java.nio.file.Path> entries = java.nio.file.Files.list(folder))
+            {
+                for (final java.nio.file.Path entry : (Iterable<java.nio.file.Path>) entries::iterator)
+                {
+                    if (java.nio.file.Files.isDirectory(entry))
+                    {
+                        folders.push(entry);
+                        continue;
+                    }
+
+                    final String file = entry.getFileName().toString().replace(".blueprint", "");
+
+                    if (entry.toString().endsWith("blueprint") && (hutBlock != ModBlocks.blockHutStable || file.endsWith("1")))
+                    {
+                        final String path = entry.getParent().resolve(file + ".blueprint").toString().replace('\\', '/');
+                        order.add(new Design(file.equals(hutName + "1") ? 0 : file.endsWith("1") && !file.startsWith("alt") ? 1 : 2,
+                          mappedFile != null && path.endsWith(mappedFile), path, entry));
+                    }
+                }
+            }
+            catch (final java.io.IOException e)
+            {
+                ColonyAutopilot.LOGGER.warn("could not list the style pack folder {}", folder, e);
+            }
+        }
+        Collections.sort(order);
+        Blueprint invisible = null;
+        for (final Design design : order)
+        {
+
+            final Blueprint bp = StructurePacks.getBlueprint(pack.getName(), design.file(), registries);
+            final BlockPos at = bp == null ? null : bp.getPrimaryBlockOffset();
+            if (at != null && at.getX() >= 0 && at.getY() >= 0 && at.getZ() >= 0
+                  && at.getX() < bp.getSizeX() && at.getY() < bp.getSizeY() && at.getZ() < bp.getSizeZ()
+                  && bp.getPalette()[bp.getStructure()[at.getY()][at.getZ()][at.getX()] & 0xFFFF].getBlock() == hutBlock)
+            {
+
+                if (!BlueprintTagUtils.getBlueprintTags(bp).getOrDefault(BlockPos.ZERO, List.of()).contains("invisible"))
+                {
+                    return bp;
+                }
+                invisible = invisible == null ? bp : invisible;
+            }
+        }
+        return invisible;
+    }
+
     private void beginPlacement(final IColony colony, final ServerLevel level, final ResolvedStep step, final Block hutBlock)
     {
+
+        importantCallUnanswered.remove(ColonyAutopilot.colonyKey(colony));
 
         if (!AutopilotConfig.live(colony, AutopilotConfig.GROWTH_ENABLED))
         {
@@ -2428,29 +3371,16 @@ public class GrowthDirector
             }
 
             pendingSince.put(key, level.getGameTime());
-
             final String designKey = packName + "|" + BuiltInRegistries.BLOCK.getKey(hutBlock);
             final java.nio.file.Path known = designPaths.get(designKey);
 
             final String hutName = hutBlock instanceof AbstractBlockHut<?> hut ? hut.getBlueprintName() : null;
             final String mappedFile = hutName == null || BlueprintMapping.getPathMapping("", hutName) == null
                                         ? null : "/" + BlueprintMapping.getPathMapping("", hutName) + "1.blueprint";
-            final List<Design> designs = Collections.synchronizedList(new ArrayList<>());
+            final HolderLookup.Provider registries = level.registryAccess();
             final CompletableFuture<Blueprint> future = known != null
-              ? StructurePacks.getBlueprintFuture(packName, known, true, level.registryAccess())
-              : StructurePacks.findBlueprintFuture(packName, bp -> {
-                  if (bp != null && bp.getFileName() != null && bp.getFilePath() != null
-                        && bp.getBlockState(bp.getPrimaryBlockOffset()).getBlock() == hutBlock)
-                  {
-                      final String file = bp.getFileName();
-                      final String path = bp.getFilePath().resolve(file + ".blueprint").toString().replace('\\', '/');
-
-                      final boolean invisible = BlueprintTagUtils.getBlueprintTags(bp).getOrDefault(BlockPos.ZERO, List.of()).contains("invisible");
-                      designs.add(new Design(invisible, file.equals(hutName + "1") ? 0 : file.endsWith("1") && !file.startsWith("alt") ? 1 : 2,
-                        mappedFile != null && path.endsWith(mappedFile), path, bp));
-                  }
-                  return false;
-              }, level.registryAccess());
+              ? StructurePacks.getBlueprintFuture(packName, known, true, registries)
+              : CompletableFuture.supplyAsync(() -> findDesign(packName, hutBlock, hutName, mappedFile, registries), IOPool.getExecutor());
             future.whenComplete((found, failure) -> {
                 if (failure != null)
                 {
@@ -2459,18 +3389,16 @@ public class GrowthDirector
                 }
             });
 
-            ServerFutureProcessor.queueBlueprint(new ServerFutureProcessor.BlueprintProcessingData(future, level, loaded -> {
+            ServerFutureProcessor.queueBlueprint(new ServerFutureProcessor.BlueprintProcessingData(future, level, blueprint -> {
                 pendingSince.remove(key);
 
-                if (!AutopilotConfig.live(colony, AutopilotConfig.GROWTH_ENABLED))
+                if (!AutopilotConfig.live(colony, AutopilotConfig.GROWTH_ENABLED) || !AutopilotConfig.get(colony, AutopilotConfig.EXPANSION_ENABLED))
                 {
                     BuilderCap.placementAbandoned(colony);
                     return;
                 }
                 try
                 {
-
-                    final Blueprint blueprint = known != null || designs.isEmpty() ? loaded : Collections.min(designs).blueprint();
                     if (blueprint == null && known != null)
                     {
                         designPaths.remove(designKey);
@@ -2487,6 +3415,11 @@ public class GrowthDirector
                         completePlacement(colony, level, step, hutBlock, pack, blueprint);
 
                         BuilderCap.placementAbandoned(colony);
+                        if (terraformer != null && terraformer.cuttingPad(colony))
+                        {
+
+                            BuilderCap.padUnderway(colony, level);
+                        }
                     }
                 }
                 catch (final Exception e)
@@ -2513,6 +3446,14 @@ public class GrowthDirector
       final Blueprint blueprint)
     {
         final ColonyId key = ColonyAutopilot.colonyKey(colony);
+        if (blueprint == null && hutBlock == ModBlocks.blockHutStable)
+        {
+
+            ColonyAutopilot.LOGGER.info("[{}] pack '{}' has no Stable to build from — the village builds none itself (not every style pack ships one); one of another style can be placed by hand once Mounted Combat is researched",
+              colony.getName(), pack.getName());
+            unavailableHuts.computeIfAbsent(key, k -> new HashSet<>()).add(hutBlock);
+            return;
+        }
         if (blueprint == null)
         {
             ColonyAutopilot.LOGGER.warn("[{}] pack '{}' has no blueprint for {} — that hut is skipped for this colony",
@@ -2523,6 +3464,13 @@ public class GrowthDirector
 
         final Long placed = lastPlacement.get(key);
         if (placed != null && level.getGameTime() - placed < AutopilotConfig.get(colony, AutopilotConfig.PLACEMENT_COOLDOWN_MINUTES) * 1200L)
+        {
+            ColonyAutopilot.LOGGER.debug("[{}] the lookup for {} came back inside the placement cooldown — dropped: another placement landed while it was queued",
+              colony.getName(), step.name());
+            return;
+        }
+
+        if (!WorldStructures.whole(colony))
         {
             return;
         }
@@ -2595,16 +3543,29 @@ public class GrowthDirector
 
         final boolean keystone = hutBlock == ModBlocks.blockHutUniversity;
 
+        final boolean coreHut = importantHut(hutBlock);
+
         final boolean fisher = hutBlock == ModBlocks.blockHutFisherman;
 
         final boolean farm = hutBlock == ModBlocks.blockHutFarmer;
 
         final int configRadius = AutopilotConfig.get(colony, AutopilotConfig.SEARCH_RADIUS_BLOCKS);
-        final int parkedBefore = fullParks.getOrDefault(key, Map.of()).getOrDefault(hutBlock, 0);
-        final int searchedRadius = keystone
-                                     ? (universityWidened.containsKey(key) ? configRadius : Math.min(configRadius, SiteSelector.KEYSTONE_RADIUS))
-                                     : Math.min(200, configRadius + configRadius / 2 * Math.min(parkedBefore, 2));
+        final boolean terraforms = AutopilotConfig.get(colony, AutopilotConfig.TERRAFORM_ENABLED) && terraformer != null;
+
+        final boolean earned = ColonyGrounds.get(level).structuresYield(colony.getID(), hutBlock);
+        final int parkedBefore = Math.max(fullParks.getOrDefault(key, Map.of()).getOrDefault(hutBlock, 0), earned && terraforms ? 1 : 0);
+
+        final Rescue bridging = frontier == null ? null : builderRescue.get(key);
+        final int bridgeRadius = bridging == null || !importantHut(bridging.hut()) ? 0
+                                   : Math.min(200, Math.max(Math.abs(frontier.getX() - colony.getCenter().getX()), Math.abs(frontier.getZ() - colony.getCenter().getZ())));
+        final int naturalRadius = keystone
+                                    ? (universityWidened.containsKey(key) || earned && terraforms ? configRadius : Math.min(configRadius, SiteSelector.KEYSTONE_RADIUS))
+                                    : Math.max(bridgeRadius, Math.min(200, configRadius + configRadius / 2 * Math.min(parkedBefore, 2)));
+
+        final int searchedRadius = coreHut && (!keystone || earned || !terraforms) ? Math.min(200, configRadius + configRadius / 2 * 2) : naturalRadius;
         final List<SiteSelector.Footprint> sacred = sacredGround(colony);
+
+        final List<SiteSelector.Footprint> structures = WorldStructures.footprintsFor(colony);
 
         final List<SiteSelector.Footprint> doorsteps = doorstepZones(colony, level);
 
@@ -2618,6 +3579,12 @@ public class GrowthDirector
                     sacred.add(pad.getValue());
                 }
             }
+        }
+
+        final Rescue landHeld = builderRescue.get(key);
+        if (landHeld != null && landHeld.hut() != hutBlock)
+        {
+            sacred.add(landHeld.land());
         }
 
         SiteSelector.Result site = null;
@@ -2695,6 +3662,8 @@ public class GrowthDirector
             final SiteSelector.Footprint anchoredPlot = withDoorstep(new SiteSelector.Footprint(zeroX, zeroZ,
               zeroX + anchored.sizeX() - 1, zeroZ + anchored.sizeZ() - 1), site.facing());
             final List<SiteSelector.Footprint> closed = new ArrayList<>(sacred);
+
+            closed.removeAll(structures);
             closed.addAll(doorsteps);
             for (final SiteSelector.Footprint zone : closed)
             {
@@ -2714,32 +3683,92 @@ public class GrowthDirector
         }
 
         final boolean onPad = site != null;
+
+        final Set<Long> band = !onPad && (farm || fisher) ? roadBand(colony, level) : Set.of();
         if (site == null)
         {
+            site = SiteSelector.findSite(level, colony, options, sacred, doorsteps, spreadFrom, coverFrom, wooded, frontier, naturalRadius, keystone, selfBuilding, fisher, farm,
+              band, false);
+            if (site == null && searchedRadius > naturalRadius)
+            {
+                site = SiteSelector.findSite(level, colony, options, sacred, doorsteps, spreadFrom, coverFrom, wooded, frontier, searchedRadius, keystone, selfBuilding, fisher, farm,
+                  band, false);
+            }
+
+            if (site == null && (parkedBefore >= 1
+                  || ((plotFailStrikes.getOrDefault(key, Map.of()).getOrDefault(hutBlock, 0) >= 2 || earned) && !terraforms))
+                  && sacred.removeAll(structures))
+            {
+
+                if (structuresYielded.computeIfAbsent(key, k -> new HashSet<>()).add(hutBlock))
+                {
+                    ColonyAutopilot.LOGGER.info("[{}] no ground clear of the world's structures for {} within {} blocks — it may now stand on one",
+                      colony.getName(), step.name(), searchedRadius);
+                }
+                site = SiteSelector.findSite(level, colony, options, sacred, doorsteps, spreadFrom, coverFrom, wooded, frontier, searchedRadius, keystone, selfBuilding, fisher, farm,
+                  band, false);
+            }
+        }
+
+        if (site == null && coreHut)
+        {
             site = SiteSelector.findSite(level, colony, options, sacred, doorsteps, spreadFrom, coverFrom, wooded, frontier, searchedRadius, keystone, selfBuilding, fisher, farm,
-              farm || fisher ? roadBand(colony, level) : Set.of());
+              band, true);
+            if (site != null)
+            {
+                ColonyAutopilot.LOGGER.info("[{}] no plot for the {} inside the colony's claim — it goes at the claim's edge, at {}, and the colony claims the ground under it",
+                  colony.getName(), step.name(), site.anchor().toShortString());
+            }
+        }
+        if (site == null && bridgeRadius > 0)
+        {
+
+            builderRescue.remove(key);
+            rescueRefused.putIfAbsent(key, new HashSet<>());
+            rescueRefused.get(key).add(bridging.hut());
+            plotFreed(key, bridging.hut());
+            ColonyAutopilot.LOGGER.info("[{}] no plot for a builder's hut within {} blocks toward the {}'s land at {} — no hut raised; the {} {}",
+              colony.getName(), naturalRadius, bridging.stepName(), frontier.toShortString(), bridging.stepName(), afterRefusedRescue(colony));
         }
         if (site == null)
         {
-            final int strikeCount = plotFailStrikes.computeIfAbsent(key, k -> new HashMap<>()).merge(hutBlock, 1, Integer::sum);
 
-            final Long rescueRefused = rescueRefusedAt.get(key);
-            final SiteSelector.Result probe = strikeCount >= 2 && !selfBuilding && (rescueRefused == null || level.getGameTime() - rescueRefused >= 24000L)
+            final int strikeCount = plotFailStrikes.computeIfAbsent(key, k -> new HashMap<>()).merge(hutBlock, coreHut ? 2 : 1, Integer::sum);
+
+            final Rescue held = builderRescue.get(key);
+            if (held != null && held.hut() == hutBlock)
+            {
+                builderRescue.remove(key);
+            }
+            final boolean rescueFree = held == null || held.hut() == hutBlock || !importantHut(held.hut());
+
+            final Set<Block> refusedRescues = rescueRefused.computeIfAbsent(key, k -> new HashSet<>());
+            final SiteSelector.Result probe = strikeCount >= 2 && !selfBuilding && !refusedRescues.contains(hutBlock) && rescueFree
                 ? SiteSelector.findSite(level, colony, options, sacred, doorsteps, List.of(), List.of(), false, null, searchedRadius, keystone, true, fisher, farm,
-                    farm || fisher ? roadBand(colony, level) : Set.of())
+                    band, false)
                 : null;
             if (probe != null)
             {
 
                 ColonyAutopilot.LOGGER.info("[{}] the {} has buildable land beyond every builder's reach — a builder's hut will bridge the frontier",
                   colony.getName(), step.name());
-                builderRescue.put(key, new Rescue(step.name(), probe.anchor()));
+                final SiteSelector.Placement probed = options.get(probe.facing());
+                final int probeX = probe.anchor().getX() - probed.offsetX();
+                final int probeZ = probe.anchor().getZ() - probed.offsetZ();
+
+                final BlockPos reachPoint = new BlockPos(probe.anchor().getX(), SiteSelector.groundHeight(level, probe.anchor().getX(), probe.anchor().getZ()),
+                  probe.anchor().getZ());
+                builderRescue.put(key, new Rescue(step.name(), hutBlock, reachPoint,
+                  withDoorstep(new SiteSelector.Footprint(probeX, probeZ, probeX + probed.sizeX() - 1, probeZ + probed.sizeZ() - 1), probe.facing())));
                 plotFailStrikes.get(key).remove(hutBlock);
                 plotBlockedUntil.computeIfAbsent(key, k -> new HashMap<>()).put(hutBlock, level.getGameTime() + 24000);
                 return;
             }
-            if (strikeCount >= 2 && AutopilotConfig.get(colony, AutopilotConfig.TERRAFORM_ENABLED) && terraformer != null)
+            if (strikeCount >= 2 && terraforms)
             {
+
+                final FirstStrike early = firstStrikeRun.getOrDefault(key, Map.of()).get(hutBlock);
+                final long busyRetry = early != null && early.until() > level.getGameTime() ? early.until() : level.getGameTime() + 6000;
 
                 Collection<SiteSelector.Footprint> avoid = sacred;
                 final SiteSelector.Footprint lastRect = lastTerraform.getOrDefault(key, Map.of()).get(hutBlock);
@@ -2749,7 +3778,7 @@ public class GrowthDirector
                     avoid.add(lastRect);
                 }
                 final SiteSelector.TerraformSite flatten = SiteSelector.findTerraformSite(level, colony, options, avoid, doorsteps, spreadFrom, frontier, searchedRadius, selfBuilding, false, fisher,
-                  fisher ? roadBand(colony, level) : Set.of());
+                  fisher ? band : Set.of());
                 if (flatten != null && terraformer.begin(colony, level, hutBlock, step.name(), flatten))
                 {
 
@@ -2757,13 +3786,15 @@ public class GrowthDirector
                       .put(hutBlock, withDoorstep(new SiteSelector.Footprint(flatten.minX(), flatten.minZ(), flatten.maxX(), flatten.maxZ()), flatten.site().facing()));
                     terraformAnchors.computeIfAbsent(key, k -> new HashMap<>()).put(hutBlock, flatten.site());
 
+                    refusedRescues.remove(hutBlock);
+
                     plotBlockedUntil.computeIfAbsent(key, k -> new HashMap<>()).put(hutBlock, level.getGameTime() + 120000);
                     return;
                 }
                 if (flatten != null)
                 {
 
-                    plotBlockedUntil.computeIfAbsent(key, k -> new HashMap<>()).put(hutBlock, level.getGameTime() + 6000);
+                    plotBlockedUntil.computeIfAbsent(key, k -> new HashMap<>()).put(hutBlock, busyRetry);
                     return;
                 }
                 final Map<Block, SiteSelector.Footprint> rects = lastTerraform.get(key);
@@ -2771,7 +3802,7 @@ public class GrowthDirector
                 {
                     rects.remove(hutBlock);
                 }
-                if (keystone && universityWidened.putIfAbsent(key, Boolean.TRUE) == null)
+                if (keystone && !earned && universityWidened.putIfAbsent(key, Boolean.TRUE) == null)
                 {
 
                     ColonyAutopilot.LOGGER.info("[{}] no ground for the {} within {} blocks even for the terraformer — widening its search to the full {} blocks",
@@ -2782,7 +3813,10 @@ public class GrowthDirector
 
                 final SiteSelector.Placement south = options.get(Direction.SOUTH);
                 final int strikes = fullParks.computeIfAbsent(key, k -> new HashMap<>()).merge(hutBlock, 1, Integer::sum);
-                if (strikes >= 3)
+
+                ColonyGrounds.get(level).setStructuresYield(colony.getID(), hutBlock, true);
+
+                if (strikes >= 3 || coreHut)
                 {
 
                     final SiteSelector.TerraformSite forced = SiteSelector.findTerraformSite(level, colony, options, avoid, doorsteps, spreadFrom, frontier, searchedRadius, selfBuilding, true, fisher,
@@ -2793,6 +3827,7 @@ public class GrowthDirector
                           .put(hutBlock, withDoorstep(new SiteSelector.Footprint(forced.minX(), forced.minZ(), forced.maxX(), forced.maxZ()), forced.site().facing()));
                         terraformAnchors.computeIfAbsent(key, k -> new HashMap<>()).put(hutBlock, forced.site());
                         fullParks.get(key).remove(hutBlock);
+                        refusedRescues.remove(hutBlock);
                         plotBlockedUntil.computeIfAbsent(key, k -> new HashMap<>()).put(hutBlock, level.getGameTime() + 120000);
                         ColonyAutopilot.LOGGER.info("[{}] no natural or normally-terraformable plot for the {} within {} blocks — force-carving its footprint flat at colony level as a last resort; it WILL build there",
                           colony.getName(), step.name(), searchedRadius);
@@ -2801,39 +3836,130 @@ public class GrowthDirector
                     if (forced != null)
                     {
 
-                        plotBlockedUntil.computeIfAbsent(key, k -> new HashMap<>()).put(hutBlock, level.getGameTime() + 6000);
+                        plotBlockedUntil.computeIfAbsent(key, k -> new HashMap<>()).put(hutBlock, busyRetry);
                         return;
                     }
 
-                    ColonyAutopilot.LOGGER.warn("[{}] the {} has no claimed, in-reach, building-clear ground within {} blocks to even force-carve (needs a ~{}x{} plot) — retrying, it will NOT be skipped",
+                    ColonyAutopilot.LOGGER.warn("[{}] the {} has no claimed, in-reach, building-clear ground the terraformer can cut within {} blocks to even force-carve (needs a ~{}x{} plot) — retrying, it will NOT be skipped",
                       colony.getName(), step.name(), searchedRadius, south.sizeX(), south.sizeZ());
                     plotBlockedUntil.computeIfAbsent(key, k -> new HashMap<>()).put(hutBlock, level.getGameTime() + 48000);
+                    refusedRescues.remove(hutBlock);
                     return;
                 }
                 ColonyAutopilot.LOGGER.info("[{}] no buildable plot and no terraformable land for {} within {} blocks (needs a ~{}x{} plot) — parked for 40 game-minutes; strike {} of 3, the next search runs wider",
                   colony.getName(), step.name(), searchedRadius, south.sizeX(), south.sizeZ(), strikes);
                 plotBlockedUntil.computeIfAbsent(key, k -> new HashMap<>()).put(hutBlock, level.getGameTime() + 48000);
+                refusedRescues.remove(hutBlock);
                 return;
             }
-            ColonyAutopilot.LOGGER.info("[{}] no buildable plot for {} within {} blocks — later plan steps continue, retrying it in 5 game-minutes",
-              colony.getName(), step.name(), searchedRadius);
-            plotBlockedUntil.computeIfAbsent(key, k -> new HashMap<>()).put(hutBlock, level.getGameTime() + 6000);
+
+            ColonyAutopilot.LOGGER.info("[{}] no buildable plot for {} within {} blocks — later plan steps continue, retrying it in {} game-minutes",
+              colony.getName(), step.name(), searchedRadius, coreHut ? 40 : 5);
+            plotBlockedUntil.computeIfAbsent(key, k -> new HashMap<>()).put(hutBlock, level.getGameTime() + (coreHut ? 48000 : 6000));
+            if (strikeCount >= 2)
+            {
+
+                refusedRescues.remove(hutBlock);
+
+                ColonyGrounds.get(level).setStructuresYield(colony.getID(), hutBlock, true);
+            }
+            else
+            {
+
+                final Set<Block> shortOf = plotShortage.computeIfAbsent(key, k -> new HashSet<>());
+                if (shortOf.add(hutBlock) && shortOf.size() == PLOT_SHORTAGE_HUTS)
+                {
+                    ColonyAutopilot.LOGGER.info("[{}] the village is short of plots — {} huts in a row found none, and it stays so until the search finds one",
+                      colony.getName(), PLOT_SHORTAGE_HUTS);
+                }
+            }
+            if (!terraforms)
+            {
+                firstStrikeRun.remove(key);
+            }
+            else
+            {
+
+                final Map<Block, Long> parks = plotBlockedUntil.get(key);
+                final Map<Block, FirstStrike> run = firstStrikeRun.computeIfAbsent(key, k -> new HashMap<>());
+                run.put(hutBlock, new FirstStrike(step.name(), parks.get(hutBlock), false));
+                final long now = level.getGameTime();
+                int waiting = 0;
+                for (final Map.Entry<Block, FirstStrike> struck : run.entrySet())
+                {
+                    final FirstStrike first = struck.getValue();
+                    if (!first.carried() && first.until() > now && Long.valueOf(first.until()).equals(parks.get(struck.getKey())))
+                    {
+                        waiting++;
+                    }
+                }
+                Block next = null;
+                long nextEnd = Long.MAX_VALUE;
+                boolean tied = false;
+                for (final Map.Entry<Block, Long> park : parks.entrySet())
+                {
+                    if (park.getValue() > now && park.getValue() < nextEnd)
+                    {
+                        next = park.getKey();
+                        nextEnd = park.getValue();
+                        tied = false;
+                    }
+                    else if (park.getValue() == nextEnd)
+                    {
+                        tied = true;
+                    }
+                }
+                final FirstStrike released = next == null || tied ? null : run.get(next);
+                if (waiting >= PLOT_SHORTAGE_HUTS && released != null && released.until() == nextEnd && !terraformer.busy(colony))
+                {
+                    parks.remove(next);
+                    ColonyAutopilot.LOGGER.info("[{}] {} huts in a row found no plot — the {} is searched again now, not in 5 game-minutes: its next refusal goes up the ladder (reach probe, then the terraformer)",
+                      colony.getName(), waiting, released.name());
+                }
+            }
             return;
         }
 
-        if (frontier != null && site.anchor().distSqr(frontier) > SiteSelector.BUILDER_RANGE_SQ)
+        final Map<Block, FirstStrike> run = firstStrikeRun.get(key);
+        if (run != null)
         {
-            ColonyAutopilot.LOGGER.info("[{}] no plot for a builder's hut within reach of the stranded land at {} (the nearest, {}, is {} blocks short of covering it) — no hut raised; the stranded building takes the terraformer's ladder instead",
+            final Map<Block, Long> parks = plotBlockedUntil.getOrDefault(key, Map.of());
+            run.entrySet().removeIf(struck -> struck.getKey() == hutBlock || parks.get(struck.getKey()) != null
+              || struck.getValue().until() <= level.getGameTime());
+            run.replaceAll((hut, struck) -> new FirstStrike(struck.name(), struck.until(), true));
+        }
+
+        if (!onPad)
+        {
+            final Set<Block> shortOf = plotShortage.remove(key);
+            if (shortOf != null && shortOf.size() >= PLOT_SHORTAGE_HUTS)
+            {
+                ColonyAutopilot.LOGGER.info("[{}] the search found a plot for {} — the village is no longer short of plots",
+                  colony.getName(), step.name());
+            }
+        }
+
+        if (frontier != null && site.anchor().above(lift).distSqr(frontier) > SiteSelector.BUILDER_RANGE_SQ)
+        {
+            ColonyAutopilot.LOGGER.info("[{}] no plot for a builder's hut within reach of the stranded land at {} (the nearest, {}, is {} blocks short of covering it) — no hut raised; the stranded building {}",
               colony.getName(), frontier.toShortString(), site.anchor().toShortString(),
-              (int) Math.ceil(Math.sqrt(site.anchor().distSqr(frontier)) - Math.sqrt(SiteSelector.BUILDER_RANGE_SQ)));
-            plotBlockedUntil.computeIfAbsent(key, k -> new HashMap<>()).put(hutBlock, level.getGameTime() + 24000);
+              (int) Math.ceil(Math.sqrt(site.anchor().above(lift).distSqr(frontier)) - Math.sqrt(SiteSelector.BUILDER_RANGE_SQ)), afterRefusedRescue(colony));
 
             if (onPad)
             {
                 terraformAbandoned(key, hutBlock);
             }
-            rescueRefusedAt.put(key, level.getGameTime());
-            builderRescue.remove(key);
+
+            plotBlockedUntil.computeIfAbsent(key, k -> new HashMap<>()).put(hutBlock, level.getGameTime() + 24000);
+            final Rescue unbridged = builderRescue.remove(key);
+            if (unbridged != null)
+            {
+                rescueRefused.computeIfAbsent(key, k -> new HashSet<>()).add(unbridged.hut());
+                if (importantHut(unbridged.hut()))
+                {
+                    plotFreed(key, unbridged.hut());
+                }
+            }
             return;
         }
 
@@ -2868,8 +3994,7 @@ public class GrowthDirector
         final String levelOnePath = fullPath + "/" + fileName.substring(0, fileName.length() - 1) + "1.blueprint";
         hut.setBlueprintPath(levelOnePath);
 
-        final FakePlayer owner = FakePlayerFactory.get(level,
-          new GameProfile(colony.getPermissions().getOwner(), colony.getPermissions().getOwnerName()));
+        final FakePlayer owner = ColonyAutopilot.fakeOwner(level, colony);
         state.getBlock().setPlacedBy(level, hutSite.anchor(), state, owner, new ItemStack(hutBlock));
 
         final SiteSelector.Placement chosen = options.get(site.facing());
@@ -2877,6 +4002,15 @@ public class GrowthDirector
         final int zeroZ = site.anchor().getZ() - chosen.offsetZ();
         final SiteSelector.Footprint plot = new SiteSelector.Footprint(zeroX, zeroZ,
           zeroX + chosen.sizeX() - 1, zeroZ + chosen.sizeZ() - 1);
+
+        for (final SiteSelector.Footprint box : structures)
+        {
+            if (box.intersects(plot.minX(), plot.minZ(), plot.maxX(), plot.maxZ()))
+            {
+                WorldStructures.renew(colony);
+                break;
+            }
+        }
 
         final List<SiteSelector.Footprint> obstacles = new ArrayList<>(sacredGround(colony));
         for (final IBuilding building : colony.getServerBuildingManager().getBuildings().values())
@@ -2902,10 +4036,27 @@ public class GrowthDirector
         {
             parksForColony.remove(hutBlock);
         }
+        final Set<Block> yieldedForColony = structuresYielded.get(key);
+        if (yieldedForColony != null)
+        {
+            yieldedForColony.remove(hutBlock);
+        }
+        ColonyGrounds.get(level).setStructuresYield(colony.getID(), hutBlock, false);
         if (selfBuilding)
         {
-            rescueRefusedAt.remove(key);
-            builderRescue.remove(key);
+            rescueRefused.remove(key);
+            final Rescue bridged = builderRescue.remove(key);
+            if (bridged != null && importantHut(bridged.hut()) && frontier != null)
+            {
+
+                builderRescue.put(key, bridged);
+                plotBlockedUntil.putIfAbsent(key, new HashMap<>());
+                plotBlockedUntil.get(key).put(bridged.hut(), level.getGameTime() + 24000);
+            }
+            else if (bridged != null && importantHut(bridged.hut()))
+            {
+                plotFreed(key, bridged.hut());
+            }
         }
         else
         {
@@ -2914,6 +4065,11 @@ public class GrowthDirector
             if (held != null && held.stepName().equals(step.name()))
             {
                 builderRescue.remove(key);
+            }
+            final Set<Block> refusedForColony = rescueRefused.get(key);
+            if (refusedForColony != null)
+            {
+                refusedForColony.remove(hutBlock);
             }
         }
         if (keystone)
@@ -2954,13 +4110,15 @@ public class GrowthDirector
             if (!inside.isEmpty())
             {
 
-                final Set<BlockPos> kept = new HashSet<>(VillagePaths.erase(level, inside, Set.of(), Set.of()));
+                final Set<BlockPos> kept = new HashSet<>(VillagePaths.erase(level, inside, Set.of(), Set.of(), null));
+                final Set<Long> laidInWater = ColonyGrounds.get(level).roadWater(colony.getID());
                 final List<BlockPos> lifted = new ArrayList<>();
                 for (final BlockPos block : inside)
                 {
                     if (!kept.contains(block))
                     {
                         lifted.add(block);
+                        laidInWater.remove(block.asLong());
                     }
                 }
                 road.getValue().removeAll(lifted);
@@ -3033,10 +4191,15 @@ public class GrowthDirector
               SiteSelector.yardTop(level, ColonyGrounds.get(level), colony.getID(), centre, hallBox), hallBox, obstacles, VillagePaths.ARRIVAL, false);
         }
 
+        final List<SiteSelector.Footprint> grounds = new ArrayList<>(obstacles);
+        if (landHeld != null && landHeld.hut() != hutBlock)
+        {
+            grounds.add(landHeld.land());
+        }
         if (hutBlock == ModBlocks.blockHutFisherman)
         {
 
-            final List<SiteSelector.Footprint> pondObstacles = new ArrayList<>(obstacles);
+            final List<SiteSelector.Footprint> pondObstacles = new ArrayList<>(grounds);
             pondObstacles.addAll(doorsteps);
             FishingPond.ensure(level, colony, hutSite.anchor(), plot, site.facing(), pondObstacles, roadBand(colony, level));
         }
@@ -3046,7 +4209,7 @@ public class GrowthDirector
         if (placedFarm != null)
         {
 
-            final List<SiteSelector.Footprint> fieldObstacles = new ArrayList<>(obstacles);
+            final List<SiteSelector.Footprint> fieldObstacles = new ArrayList<>(grounds);
             fieldObstacles.add(plot);
             fieldObstacles.addAll(doorsteps);
             FarmFields.layNaturalField(level, colony, placedFarm, fieldObstacles, roadBand(colony, level));
@@ -3054,11 +4217,11 @@ public class GrowthDirector
 
         if (hutBlock == ModBlocks.blockHutLumberjack)
         {
-            ForesterGrove.ensure(level, colony, site.anchor(), plot, obstacles);
+            ForesterGrove.ensure(level, colony, site.anchor(), plot, grounds);
         }
 
         if (hutBlock == ModBlocks.blockHutUniversity && AutopilotConfig.get(colony, AutopilotConfig.INSTANT_UNIVERSITY)
-              && AutopilotConfig.get(colony, AutopilotConfig.AUTO_UPGRADE_ENABLED))
+              && AutopilotConfig.buildsPlacedHuts(colony))
         {
             grantFirstLevel(colony, level, hutSite.anchor(), pack, levelOnePath, RotationMirror.of(Rotation.values()[steps], Mirror.NONE));
         }
@@ -3092,7 +4255,8 @@ public class GrowthDirector
                 {
 
                     offsetLearning.put(here, Long.MAX_VALUE);
-                    ColonyAutopilot.LOGGER.warn("[{}] the {}'s blueprint cannot be read (pack '{}', path '{}') — its ground line stays unknown this session; grading and doorstep work assume the block under the hut (fix the pack or path)",
+                    apronOwed.remove(building);
+                    ColonyAutopilot.LOGGER.warn("[{}] the {}'s blueprint cannot be read (pack '{}', path '{}') — its ground line stays unknown this session, so no doorstep road is carved to it and no apron is graded around it: a road on a guessed line can miss the door (fix the pack or path and restart)",
                       colony.getName(), SiteSelector.plainName(building), building.getStructurePack(), blueprintPath);
                     if (building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutTownHall)
                     {
@@ -3102,7 +4266,7 @@ public class GrowthDirector
                 else
                 {
                     ColonyAutopilot.LOGGER.debug("[{}] could not read the {}'s blueprint (pack '{}', path '{}') — its ground line stays unknown; retrying in five game-minutes",
-                      colony.getName(), building.getBuildingDisplayName(), building.getStructurePack(), blueprintPath);
+                      colony.getName(), SiteSelector.plainName(building), building.getStructurePack(), blueprintPath);
                 }
                 return;
             }
@@ -3114,7 +4278,7 @@ public class GrowthDirector
             if (offset != 1)
             {
                 ColonyAutopilot.LOGGER.info("[{}] the {} stands {} block(s) above its ground line (its style's blueprint says so) — grading and doorstep work use that line from now on",
-                  colony.getName(), building.getBuildingDisplayName(), offset);
+                  colony.getName(), SiteSelector.plainName(building), offset);
             }
 
             if ((AutopilotConfig.get(colony, AutopilotConfig.BUILD_PATHS) || apronOwed.contains(building)) && building.getBuildingLevel() > 0)
@@ -3161,7 +4325,7 @@ public class GrowthDirector
 
             pendingRoadReconnects.add(building);
             ColonyAutopilot.LOGGER.info("[{}] the {} opened at level 1 — research starts now, and the builders raise its walls around the scholars",
-              colony.getName(), building.getBuildingDisplayName());
+              colony.getName(), SiteSelector.plainName(building));
             }
             catch (final Exception e)
             {
@@ -3288,6 +4452,7 @@ public class GrowthDirector
                   || building.getColony().getServerBuildingManager().getBuilding(building.getPosition()) != building
                   || IColonyManager.getInstance().getColonyByWorld(building.getColony().getID(), building.getColony().getWorld()) != building.getColony())
             {
+                apronOwed.remove(building);
                 continue;
             }
             lastCarveSpent = 0;
@@ -3351,7 +4516,7 @@ public class GrowthDirector
         if (skirt.total() > 0)
         {
             ColonyAutopilot.LOGGER.info("[{}] smoothed {} blocks around the {} you placed — a hand-placed hut gets its apron once its first level stands",
-              colony.getName(), skirt.total(), building.getBuildingDisplayName());
+              colony.getName(), skirt.total(), SiteSelector.plainName(building));
         }
         return true;
     }
@@ -3403,10 +4568,16 @@ public class GrowthDirector
             final MinimumStockModule stock = building.getModule(MinimumStockModule.class);
             if (stock != null)
             {
-                ProvidenceSweep.addStockLine(building, stock, new ItemStack(ModItems.sifterMeshString), 1);
-                ProvidenceSweep.addStockLine(building, stock, new ItemStack(Items.SAND), 2);
-                ProvidenceSweep.addStockLine(building, stock, new ItemStack(Items.GRAVEL), 2);
-                ColonyAutopilot.LOGGER.info("[{}] the sifter's supplies are on standing order — mesh, sand and gravel", colony.getName());
+                final List<ItemStack> supplies = List.of(new ItemStack(ModItems.sifterMeshString), new ItemStack(Items.SAND), new ItemStack(Items.GRAVEL));
+                final boolean held = supplies.stream().allMatch(stock::isStocked);
+                ProvidenceSweep.addStockLine(building, stock, supplies.get(0), 1);
+                ProvidenceSweep.addStockLine(building, stock, supplies.get(1), 2);
+                ProvidenceSweep.addStockLine(building, stock, supplies.get(2), 2);
+
+                if (!held && supplies.stream().allMatch(stock::isStocked))
+                {
+                    ColonyAutopilot.LOGGER.info("[{}] the sifter's supplies are on standing order — sand and gravel, and a mesh for the colony's Fletcher to make", colony.getName());
+                }
             }
         }
         else if (building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutNetherWorker
@@ -3434,11 +4605,19 @@ public class GrowthDirector
             final MinimumStockModule stock = building.getModule(MinimumStockModule.class);
             if (stock != null)
             {
-                ProvidenceSweep.addStockLine(building, stock, new ItemStack(Items.POPPY), 1);
-                ProvidenceSweep.addStockLine(building, stock, new ItemStack(Items.DANDELION), 1);
-                ProvidenceSweep.addStockLine(building, stock, new ItemStack(Items.HONEY_BOTTLE), 1);
-                ProvidenceSweep.addStockLine(building, stock, new ItemStack(Items.GOLDEN_APPLE), 1);
-                ColonyAutopilot.LOGGER.info("[{}] the hospital's cure cabinet is on standing order — every disease's items wait before anyone falls ill", colony.getName());
+                final List<ItemStack> cures = List.of(new ItemStack(Items.POPPY), new ItemStack(Items.DANDELION), new ItemStack(Items.HONEY_BOTTLE),
+                  new ItemStack(Items.GOLDEN_APPLE));
+                final boolean held = cures.stream().allMatch(stock::isStocked);
+                for (final ItemStack cure : cures)
+                {
+                    ProvidenceSweep.addStockLine(building, stock, cure, 1);
+                }
+
+                if (!held && cures.stream().allMatch(stock::isStocked))
+                {
+                    ColonyAutopilot.LOGGER.info("[{}] the hospital's cure cabinet is on standing order — poppy, dandelion, honey bottle and golden apple wait before anyone falls ill (carrot, potato and kelp, the other cure items, come from the fields)",
+                      colony.getName());
+                }
             }
         }
         if (building.getBuildingType().getBuildingBlock() == ModBlocks.blockHutGraveyard)
@@ -3707,22 +4886,17 @@ public class GrowthDirector
         return null;
     }
 
-    private static JobEntry nextRanged(final IColony colony, final IBuilding post, final GuardCensus count)
+    private static JobEntry nextRanged(final IColony colony, final IBuilding post)
     {
-        final JobEntry gunner = gunnerJob(post);
         final JobEntry marksman = researchedPost(colony, post, MARKSMAN_JOB, MARKSMAN_RESEARCH);
-        if (gunner != null && marksman != null)
-        {
-            return count.gunners <= count.marksmen ? gunner : marksman;
-        }
-        return gunner != null ? gunner : marksman != null ? marksman : ModJobs.archer.get();
+        return marksman != null ? marksman : ModJobs.archer.get();
     }
 
     private static JobEntry nextFighter(final IColony colony, final IBuilding post, final GuardCensus count)
     {
         if (count.melee() >= AutopilotConfig.get(colony, AutopilotConfig.KNIGHTS_PER_ARCHER) * (count.ranged() + 1))
         {
-            return nextRanged(colony, post, count);
+            return nextRanged(colony, post);
         }
         final JobEntry huscarl = researchedPost(colony, post, HUSCARL_JOB, HUSCARL_RESEARCH);
         return huscarl != null && count.knights >= KNIGHTS_PER_HUSCARL * (count.huscarls + 1) ? huscarl : ModJobs.knight.get();
@@ -3732,6 +4906,7 @@ public class GrowthDirector
     {
         final List<IBuilding> towers = new ArrayList<>();
         final List<IBuilding> billets = new ArrayList<>();
+        final List<IBuilding> stables = new ArrayList<>();
         for (final IBuilding building : colony.getServerBuildingManager().getBuildings().values())
         {
 
@@ -3772,6 +4947,26 @@ public class GrowthDirector
                 setAutopilotPosts(building);
                 billets.add(building);
             }
+            else if (block == ModBlocks.blockHutStable)
+            {
+
+                final int minutes = 2;
+                final IntSetting wait = building.getSetting(BuildingStable.PATROL_INTERVAL);
+                if (wait != null && wait.getValue() == wait.getDefault() && wait.getValue() != minutes
+                      && AutopilotConfig.live(colony, AutopilotConfig.CAVALRY_PATROLS))
+                {
+                    ColonyAutopilot.LOGGER.info("[{}] the riders of the stable at {} wait {} minutes between two outings now, not MineColonies' {} — the Stable's own patrol interval, and another value set there is kept",
+                      colony.getName(), building.getPosition().toShortString(), minutes, wait.getValue());
+                    wait.setValue(minutes);
+                    building.markDirty();
+                }
+
+                if (building instanceof BuildingStable stable)
+                {
+                    Paddocks.fitBarding(colony, stable);
+                }
+                stables.add(building);
+            }
         }
         boolean hired;
         int sweeps = 0;
@@ -3792,6 +4987,17 @@ public class GrowthDirector
                 if (billet.getAllAssignedCitizen().size() < billet.getBuildingLevel())
                 {
                     hired |= seatBillet(colony, billet);
+                }
+            }
+            for (final IBuilding stable : stables)
+            {
+
+                if (!stable.getModule(BuildingModules.STABLEMASTER_WORK).getAssignedCitizen().isEmpty()
+                      && stable.getModule(BuildingModules.CAVALRY_STABLE_WORK).getAssignedCitizen().size()
+                           < colony.getAnimalManager().getAnimalsOfClassByHome(CavalryHorseEntity.class, stable).stream()
+                               .filter(data -> data.getManagedAnimal().orElse(null) instanceof CavalryHorseEntity mount && mount.isReadyForCombat()).count())
+                {
+                    hired |= staffGuardPost(colony, stable, Set.of(ModJobs.cavalry.get()));
                 }
             }
         }
@@ -3816,7 +5022,15 @@ public class GrowthDirector
     {
         for (final IColony colony : IColonyManager.getInstance().getAllColonies())
         {
-            releaseHeldGuardPosts(colony);
+
+            try
+            {
+                releaseHeldGuardPosts(colony);
+            }
+            catch (final Exception e)
+            {
+                ColonyAutopilot.LOGGER.warn("Releasing held guard posts failed for colony {}", colony.getName(), e);
+            }
         }
     }
 
@@ -3829,6 +5043,14 @@ public class GrowthDirector
             if (block == ModBlocks.blockHutGuardTower || block == ModBlocks.blockHutBarracksTower)
             {
                 released += releaseHeldPosts(colony, building);
+            }
+
+            else if (block == ModBlocks.blockHutGraveyard && !AutopilotConfig.live(colony, AutopilotConfig.NO_GRAVES)
+                       && building.getModule(WorkerBuildingModule.class) instanceof WorkerBuildingModule crew && crew.getHiringMode() == HiringMode.LOCKED)
+            {
+                crew.setHiringMode(HiringMode.DEFAULT);
+                ColonyAutopilot.LOGGER.info("[{}] graves rise again — the undertaker's post the autopilot held at the graveyard goes back to MineColonies' own hiring",
+                  colony.getName());
             }
         }
         if (released > 0)
@@ -3972,7 +5194,7 @@ public class GrowthDirector
     private static List<JobEntry> fallbackPosts(final IColony colony, final IBuilding tower, final JobEntry wanted)
     {
         final List<JobEntry> ranged = new ArrayList<>();
-        for (final JobEntry job : new JobEntry[] {gunnerJob(tower), researchedPost(colony, tower, MARKSMAN_JOB, MARKSMAN_RESEARCH), ModJobs.archer.get()})
+        for (final JobEntry job : new JobEntry[] {researchedPost(colony, tower, MARKSMAN_JOB, MARKSMAN_RESEARCH), ModJobs.archer.get()})
         {
             if (job != null)
             {
@@ -4028,24 +5250,6 @@ public class GrowthDirector
         return false;
     }
 
-    private static final ResourceLocation GUNNER_JOB = ResourceLocation.fromNamespaceAndPath("minecolonies_compatibility", "gunner");
-
-    private static JobEntry gunnerJob(final IBuilding post)
-    {
-        if (!net.neoforged.fml.ModList.get().isLoaded("tacz") || !AutopilotConfig.get(post.getColony(), AutopilotConfig.GUNNER_GUARDS))
-        {
-            return null;
-        }
-        for (final GuardBuildingModule module : post.getModulesByType(GuardBuildingModule.class))
-        {
-            if (GUNNER_JOB.equals(module.getJobEntry().getKey()))
-            {
-                return module.getJobEntry();
-            }
-        }
-        return null;
-    }
-
     private static void reserveForPlayer(final IColony colony, final IBuilding tower)
     {
         int closed = 0;
@@ -4085,7 +5289,6 @@ public class GrowthDirector
         int huscarls;
         int archers;
         int marksmen;
-        int gunners;
         int druids;
         int others;
 
@@ -4115,10 +5318,6 @@ public class GrowthDirector
             {
                 marksmen += heads;
             }
-            else if (GUNNER_JOB.equals(job.getKey()))
-            {
-                gunners += heads;
-            }
             else if (countUnknown)
             {
                 others += heads;
@@ -4132,7 +5331,7 @@ public class GrowthDirector
 
         int ranged()
         {
-            return archers + marksmen + gunners;
+            return archers + marksmen;
         }
 
         int fighters()
@@ -4206,6 +5405,11 @@ public class GrowthDirector
             return;
         }
 
+        if (!colony.getSettings().getSetting(com.minecolonies.core.colony.buildings.workerbuildings.BuildingTownHall.AUTO_HIRING_MODE).getValue())
+        {
+            return;
+        }
+
         GuardCensus c = censusGuards(colony, false);
         if (c.total() == 0)
         {
@@ -4271,23 +5475,21 @@ public class GrowthDirector
         {
             final JobEntry huscarl = researchedPost(colony, barracks, HUSCARL_JOB, HUSCARL_RESEARCH);
             final JobEntry marksman = researchedPost(colony, barracks, MARKSMAN_JOB, MARKSMAN_RESEARCH);
-            final JobEntry gunner = gunnerJob(barracks);
             final JobEntry archer = ModJobs.archer.get();
 
-            final JobEntry[] jobs = {ModJobs.knight.get(), postJob(barracks, HUSCARL_JOB), archer, postJob(barracks, MARKSMAN_JOB), postJob(barracks, GUNNER_JOB)};
+            final JobEntry[] jobs = {ModJobs.knight.get(), postJob(barracks, HUSCARL_JOB), archer, postJob(barracks, MARKSMAN_JOB)};
 
             for (int move = 0; move <= c.total(); move++)
             {
                 final int fighters = c.melee() + c.ranged();
                 final int wantRanged = fighters / (AutopilotConfig.get(colony, AutopilotConfig.KNIGHTS_PER_ARCHER) + 1);
                 final int wantHuscarls = huscarl == null ? 0 : (fighters - wantRanged) / (KNIGHTS_PER_HUSCARL + 1);
-                final int wantMarksmen = marksman == null ? 0 : gunner == null ? wantRanged : wantRanged / 2;
-                final int wantGunners = gunner == null ? 0 : wantRanged - wantMarksmen;
+                final int wantMarksmen = marksman == null ? 0 : wantRanged;
                 final int[] over = {
                   c.knights - (fighters - wantRanged - wantHuscarls), c.huscarls - wantHuscarls,
-                  c.archers - (wantRanged - wantMarksmen - wantGunners), c.marksmen - wantMarksmen, c.gunners - wantGunners};
+                  c.archers - (wantRanged - wantMarksmen), c.marksmen - wantMarksmen};
 
-                final boolean retired = c.archers > 0 && (gunner != null || marksman != null);
+                final boolean retired = c.archers > 0 && marksman != null;
 
                 final boolean[] movable = movableTypes(colony, jobs);
                 int most = -1;
@@ -4405,10 +5607,6 @@ public class GrowthDirector
             victim.setJob(null);
             if (target.assignCitizen(victim))
             {
-                if (GUNNER_JOB.equals(sourceModule.getJobEntry().getKey()))
-                {
-                    ProvidenceSweep.reclaimIssuedKit(victim, building);
-                }
                 ColonyAutopilot.LOGGER.info("[{}] reassigned {} from {} to {} to hold the militia's balance",
                   colony.getName(), victim.getName(), sourceModule.getJobEntry().getKey().getPath(), toJob.getKey().getPath());
                 return true;
@@ -4509,24 +5707,55 @@ public class GrowthDirector
         {
             jobless = colony.getCitizenManager().getJoblessCitizen();
         }
+
+        boolean student = false;
+        if (jobless == null)
+        {
+            jobless = bestStudent(colony, neediest);
+            student = jobless != null;
+            if (student)
+            {
+                jobless.setJob(null);
+            }
+        }
         if (jobless == null || !neediest.assignCitizen(jobless))
         {
             return false;
         }
-        ColonyAutopilot.LOGGER.info("[{}] {} takes up the {} post at the {}",
-          colony.getName(), jobless.getName(), neediest.getJobEntry().getKey().getPath(), post.getBuildingDisplayName());
+        ColonyAutopilot.LOGGER.info("[{}] {} takes up the {} post at the {}{}",
+          colony.getName(), jobless.getName(), neediest.getJobEntry().getKey().getPath(), SiteSelector.plainName(post),
+          student ? " — a student called from the Library, nobody being without a workplace" : "");
         return true;
+    }
+
+    private static ICitizenData bestStudent(final IColony colony, final GuardBuildingModule module)
+    {
+        ICitizenData best = null;
+        for (final ICitizenData citizen : colony.getCitizenManager().getCitizens())
+        {
+            if (citizen.getJob() != null && !citizen.isChild() && citizen.getJob().getJobRegistryEntry().equals(ModJobs.student.get())
+                  && (best == null || skillOf(citizen, module) > skillOf(best, module)))
+            {
+                best = citizen;
+            }
+        }
+        return best;
     }
 
     private static boolean canSeat(final IBuilding post, final GuardBuildingModule module)
     {
+        if (post.getColony().getWorld() == null
+              || !WorldUtil.isChunkLoaded(post.getColony().getWorld(), post.getPosition().getX() >> 4, post.getPosition().getZ() >> 4))
+        {
+            return false;
+        }
         final HiringMode mode = module.getHiringMode() == HiringMode.LOCKED ? HiringMode.DEFAULT : module.getHiringMode();
         return BuildingUtils.canAutoHire(post, mode, module.getJobEntry());
     }
 
     private static JobEntry schoolOf(final JobEntry post)
     {
-        if (post == ModJobs.archer.get() || MARKSMAN_JOB.equals(post.getKey()) || GUNNER_JOB.equals(post.getKey()))
+        if (post == ModJobs.archer.get() || MARKSMAN_JOB.equals(post.getKey()))
         {
             return ModJobs.archerInTraining.get();
         }
@@ -4579,7 +5808,7 @@ public class GrowthDirector
                 {
                     continue;
                 }
-                if (module.getJobEntry() == ModJobs.archer.get() && nextRanged(colony, post, new GuardCensus()) != ModJobs.archer.get())
+                if (module.getJobEntry() == ModJobs.archer.get() && nextRanged(colony, post) != ModJobs.archer.get())
                 {
                     continue;
                 }
@@ -4605,14 +5834,10 @@ public class GrowthDirector
                 final int weakSkill = skillOf(weakest, module);
                 graduate.setJob(null);
                 module.removeCitizen(weakest);
-                if (GUNNER_JOB.equals(module.getJobEntry().getKey()))
-                {
-                    ProvidenceSweep.reclaimIssuedKit(weakest, post);
-                }
                 if (module.assignCitizen(graduate))
                 {
                     ColonyAutopilot.LOGGER.info("[{}] promoted {} into the {} — they out-skill {} ({} to {}), who steps down to find other work",
-                      colony.getName(), graduate.getName(), post.getBuildingDisplayName(), weakest.getName(), gradSkill, weakSkill);
+                      colony.getName(), graduate.getName(), SiteSelector.plainName(post), weakest.getName(), gradSkill, weakSkill);
                 }
                 return;
             }
@@ -4688,26 +5913,27 @@ public class GrowthDirector
 
         final ColonyGrounds grounds = ColonyGrounds.get(level);
         final List<int[]> anchors = new ArrayList<>();
+        int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE, minZ = Integer.MAX_VALUE, maxZ = Integer.MIN_VALUE;
         for (final IBuilding building : colony.getServerBuildingManager().getBuildings().values())
         {
 
             if (building.getBuildingLevel() > 0 && grounds.hasAnchorOffset(colony.getID(), building.getPosition()))
             {
                 final BlockPos pos = building.getPosition();
-                anchors.add(new int[] {pos.getX(), pos.getZ(), pos.getY() - grounds.anchorOffset(colony.getID(), pos, 1)});
+                minX = Math.min(minX, pos.getX());
+                maxX = Math.max(maxX, pos.getX());
+                minZ = Math.min(minZ, pos.getZ());
+                maxZ = Math.max(maxZ, pos.getZ());
+
+                if (!building.hasParent())
+                {
+                    anchors.add(new int[] {pos.getX(), pos.getZ(), pos.getY() - grounds.anchorOffset(colony.getID(), pos, 1)});
+                }
             }
         }
         if (anchors.size() < 2)
         {
             return;
-        }
-        int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE, minZ = Integer.MAX_VALUE, maxZ = Integer.MIN_VALUE;
-        for (final int[] anchor : anchors)
-        {
-            minX = Math.min(minX, anchor[0]);
-            maxX = Math.max(maxX, anchor[0]);
-            minZ = Math.min(minZ, anchor[1]);
-            maxZ = Math.max(maxZ, anchor[1]);
         }
         minX -= RAVINE_SURVEY_MARGIN;
         maxX += RAVINE_SURVEY_MARGIN;
@@ -4773,7 +5999,7 @@ public class GrowthDirector
             {
                 continue;
             }
-            if (shielded(survey, x, z))
+            if (SiteSelector.insideAny(survey.shields, x, z))
             {
                 continue;
             }
@@ -4834,18 +6060,6 @@ public class GrowthDirector
         }
     }
 
-    private static boolean shielded(final RavineSurvey survey, final int x, final int z)
-    {
-        for (final SiteSelector.Footprint shield : survey.shields)
-        {
-            if (shield.intersects(x, z, x, z))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private static int gradeAt(final RavineSurvey survey, final int x, final int z)
     {
         return survey.grades.computeIfAbsent(BlockPos.asLong(x, 0, z), k -> {
@@ -4898,7 +6112,7 @@ public class GrowthDirector
             }
             final int bankGrade = gradeAt(survey, bx, bz);
             final int bankSurface = surfaceAt(survey, bx, bz);
-            if (!shielded(survey, bx, bz) && bankSurface >= overFloor
+            if (!SiteSelector.insideAny(survey.shields, bx, bz) && bankSurface >= overFloor
                   && bankSurface >= (bankGrade == Integer.MIN_VALUE ? grade : bankGrade) - RAVINE_BANK_SLACK)
             {
                 return step;
@@ -4938,6 +6152,11 @@ public class GrowthDirector
         {
             obstacles.add(SiteSelector.boxOf(other));
         }
+        final Rescue held = builderRescue.get(ColonyAutopilot.colonyKey(colony));
+        if (held != null)
+        {
+            obstacles.add(held.land());
+        }
         return obstacles;
     }
 
@@ -4973,6 +6192,12 @@ public class GrowthDirector
 
         final Direction recorded = grounds.front(colony.getID(), anchor, facing);
         final Entrance entrance = builtEntrance(level, corners, groundY, recorded);
+
+        if (entrance == null && upgrades != null && upgrades.repairPending(colony, anchor)
+              && !roadsOf(colony, level).getOrDefault(anchor, List.of()).isEmpty())
+        {
+            return;
+        }
         final Direction exit = entrance != null ? entrance.side() : recorded;
         final BlockPos from = entrance != null ? entrance.door() : anchor;
 
@@ -5013,26 +6238,59 @@ public class GrowthDirector
             }
 
             double best = Double.MAX_VALUE;
+            final Map<Long, List<Integer>> ownAt = new HashMap<>();
+            int ownMinX = Integer.MAX_VALUE, ownMaxX = Integer.MIN_VALUE, ownMinZ = Integer.MAX_VALUE, ownMaxZ = Integer.MIN_VALUE;
+            for (int place = 0; place < own.size(); place++)
+            {
+                final BlockPos mine = own.get(place);
+                ownAt.computeIfAbsent(BlockPos.asLong(mine.getX(), 0, mine.getZ()), k -> new ArrayList<>()).add(place);
+                ownMinX = Math.min(ownMinX, mine.getX() - 1);
+                ownMaxX = Math.max(ownMaxX, mine.getX() + 1);
+                ownMinZ = Math.min(ownMinZ, mine.getZ() - 1);
+                ownMaxZ = Math.max(ownMaxZ, mine.getZ() + 1);
+            }
             for (final List<BlockPos> road : leadOn)
             {
                 for (final BlockPos block : road)
                 {
-                    if (!WorldUtil.isChunkLoaded(level, block.getX() >> 4, block.getZ() >> 4) || !level.getBlockState(block).is(Blocks.DIRT_PATH))
+                    if (block.getX() < ownMinX || block.getX() > ownMaxX || block.getZ() < ownMinZ || block.getZ() > ownMaxZ)
                     {
                         continue;
                     }
-                    for (final BlockPos mine : own)
+                    int first = Integer.MAX_VALUE;
+                    for (int dx = -1; dx <= 1; dx++)
                     {
-                        if (Math.abs(mine.getX() - block.getX()) <= 1 && Math.abs(mine.getZ() - block.getZ()) <= 1 && Math.abs(mine.getY() - block.getY()) <= 1)
+                        for (int dz = -1; dz <= 1; dz++)
                         {
-                            final double away = mine.distSqr(pathStart);
-                            if (away < best)
+                            final List<Integer> beside = ownAt.get(BlockPos.asLong(block.getX() + dx, 0, block.getZ() + dz));
+                            if (beside == null)
                             {
-                                best = away;
-                                target = block;
+                                continue;
                             }
-                            break;
+                            for (final int place : beside)
+                            {
+                                if (place >= first)
+                                {
+                                    break;
+                                }
+                                if (Math.abs(own.get(place).getY() - block.getY()) <= 1)
+                                {
+                                    first = place;
+                                    break;
+                                }
+                            }
                         }
+                    }
+                    if (first == Integer.MAX_VALUE || !WorldUtil.isChunkLoaded(level, block.getX() >> 4, block.getZ() >> 4)
+                          || !level.getBlockState(block).is(Blocks.DIRT_PATH))
+                    {
+                        continue;
+                    }
+                    final double away = own.get(first).distSqr(pathStart);
+                    if (away < best)
+                    {
+                        best = away;
+                        target = block;
                     }
                 }
             }
@@ -5086,7 +6344,7 @@ public class GrowthDirector
           roadTop != null ? 0 : VillagePaths.ARRIVAL, stub))
         {
             ColonyAutopilot.LOGGER.debug("[{}] road re-carved from the {}'s door",
-              colony.getName(), building.getBuildingDisplayName());
+              colony.getName(), SiteSelector.plainName(building));
         }
     }
 
@@ -5163,6 +6421,8 @@ public class GrowthDirector
 
     private static final int SHORT_ROAD_SKIP = 7;
 
+    private static final int ORPHAN_RETRY_DAYS = 7;
+
     private void requeueOrphanRoads(final IColony colony, final ServerLevel level)
     {
         final Map<BlockPos, List<BlockPos>> ledger = roadsOf(colony, level);
@@ -5170,6 +6430,8 @@ public class GrowthDirector
         {
             return;
         }
+        final Map<BlockPos, OrphanRoad> memo = orphanRoads.computeIfAbsent(ColonyAutopilot.colonyKey(colony), k -> new HashMap<>());
+        memo.keySet().retainAll(ledger.keySet());
         final IBuilding hall = colony.getServerBuildingManager().getTownHall();
         final SiteSelector.Footprint hallBox = hall != null ? SiteSelector.boxOf(hall) : null;
 
@@ -5247,8 +6509,27 @@ public class GrowthDirector
                     break;
                 }
             }
-            if (loaded && !joined)
+            if (loaded && joined)
             {
+                memo.remove(entry.getKey());
+            }
+            else if (loaded)
+            {
+
+                final OrphanRoad last = memo.get(entry.getKey());
+                final Set<BlockPos> standing = new HashSet<>(blocks);
+                final boolean same = last != null && last.blocks().equals(standing);
+                if (same && last.days() >= 1 && last.days() <= ORPHAN_RETRY_DAYS)
+                {
+                    memo.put(entry.getKey(), new OrphanRoad(standing, last.days() + 1));
+                    if (last.days() == 1)
+                    {
+                        ColonyAutopilot.LOGGER.info("[{}] the road from the {}'s door was queued for a re-carve twice and still does not touch the village, with the very blocks it had — not queued again for {} game-days unless a road of the village changes",
+                          colony.getName(), SiteSelector.plainName(owner), ORPHAN_RETRY_DAYS);
+                    }
+                    continue;
+                }
+                memo.put(entry.getKey(), new OrphanRoad(standing, same && last.days() == 0 ? 1 : 0));
                 ColonyAutopilot.LOGGER.info("[{}] the road from the {}'s door does not touch the village — queued for a re-carve",
                   colony.getName(), SiteSelector.plainName(owner));
                 reconnectLater.add(owner);
@@ -5338,7 +6619,7 @@ public class GrowthDirector
         {
             return true;
         }
-        if (!deadRoadCell(level, block) || shieldedColumn(obstacles, block.getX(), block.getZ()))
+        if (!deadRoadCell(level, block) || SiteSelector.insideAny(obstacles, block.getX(), block.getZ()))
         {
             return false;
         }
@@ -5576,7 +6857,8 @@ public class GrowthDirector
                     return false;
                 }
 
-                final List<BlockPos> left = VillagePaths.erase(level, previous, liveBlocks, Set.of());
+                final List<BlockPos> left = VillagePaths.erase(level, previous, liveBlocks, Set.of(), ColonyGrounds.get(level).roadWater(colony.getID()));
+                ColonyGrounds.get(level).setRoadLine(colony.getID(), anchor, null);
                 if (left.isEmpty())
                 {
                     ledger.remove(anchor);
@@ -5641,9 +6923,37 @@ public class GrowthDirector
         }
 
         BlockPos elbow = pathStart.relative(facing, DOORSTEP_EXIT);
+        final IBuilding owner = colony.getServerBuildingManager().getBuilding(anchor);
+        final String door = owner != null ? SiteSelector.plainName(owner) : "building at " + anchor.toShortString();
+
+        final IBuilding parent = owner != null && owner.hasParent() ? colony.getServerBuildingManager().getBuilding(owner.getParent()) : null;
+        if (parent != null)
+        {
+            final SiteSelector.Footprint parentBox = SiteSelector.boxOf(parent);
+            final BlockPos nextOut = pathStart.relative(facing);
+            final boolean hutBlockAlone = ownGrounds.maxX() - ownGrounds.minX() < 2 && ownGrounds.maxZ() - ownGrounds.minZ() < 2;
+            if (hutBlockAlone || (parentBox.intersects(pathStart.getX(), pathStart.getZ(), pathStart.getX(), pathStart.getZ())
+                                    && parentBox.intersects(nextOut.getX(), nextOut.getZ(), nextOut.getX(), nextOut.getZ())))
+            {
+                ColonyAutopilot.LOGGER.debug("[{}] the {} is part of the {} and {} — no road of its own",
+                  colony.getName(), door, SiteSelector.plainName(parent),
+                  hutBlockAlone ? "has no walls of its own to find a door in" : "its doorstep at " + pathStart.toShortString() + " begins in that building's grounds");
+                return false;
+            }
+        }
 
         final List<SiteSelector.Footprint> guarded = new ArrayList<>(obstacles);
         guarded.add(ownGrounds);
+
+        final List<SiteSelector.Footprint> fisherWater = new ArrayList<>();
+        for (final IBuilding hut : colony.getServerBuildingManager().getBuildings().values())
+        {
+            if (hut.getBuildingType().getBuildingBlock() == ModBlocks.blockHutFisherman)
+            {
+                fisherWater.add(SiteSelector.boxOf(hut));
+                fisherWater.addAll(FishingPond.dugPondShields(level, colony, hut));
+            }
+        }
 
         Set<Long> lastCarve = null;
         if (previous != null)
@@ -5659,10 +6969,19 @@ public class GrowthDirector
         final RoadRouter.Survey survey = new RoadRouter.Survey(RoadRouter.CARVE_BUDGET);
         survey.own = lastCarve;
 
+        final long[] lastLine = previous != null ? ColonyGrounds.get(level).roadLine(colony.getID(), anchor) : null;
+        if (lastLine != null)
+        {
+            survey.line = new LongOpenHashSet(lastLine);
+        }
+
+        List<int[]> walked = null;
+        final Set<Long> laidInWater = ColonyGrounds.get(level).roadWater(colony.getID());
+
         final Set<Long> blind = new HashSet<>();
         final int lampSpacing = AutopilotConfig.get(colony, AutopilotConfig.LAMP_SPACING);
-        final List<BlockPos> painted = VillagePaths.connect(level, pathStart, true, elbow, obstacles, guarded, liveRoads, junctions, lastCarve, null, null, blind, reach,
-          lampSpacing);
+        final List<BlockPos> painted = VillagePaths.connect(level, pathStart, true, elbow, obstacles, guarded, fisherWater, liveRoads, junctions, lastCarve, null, null, blind,
+          reach, lampSpacing, laidInWater);
 
         final Set<Long> fresh = new HashSet<>();
         for (final BlockPos block : painted)
@@ -5745,28 +7064,63 @@ public class GrowthDirector
             {
                 refusedWalks.remove(anchor);
             }
-            if (route == null)
-            {
-                ColonyAutopilot.LOGGER.info("[{}] no routed road from {} to {} — the straight line is carved (the router's debug line says why)",
-                  colony.getName(), elbow.toShortString(), target.toShortString());
-            }
-            else if (route.isEmpty())
+            final boolean unrouted = route == null;
+            if (!unrouted && route.isEmpty())
             {
                 route = null;
             }
-            painted.addAll(VillagePaths.connect(level, elbow, false, target, guarded, guarded, liveRoads, junctions, onwardPrevious, route, fresh, blind, reach,
-              lampSpacing));
+            final int doorstep = painted.size();
+            painted.addAll(VillagePaths.connect(level, elbow, false, target, guarded, guarded, fisherWater, liveRoads, junctions, onwardPrevious, route, fresh, blind,
+              reach, lampSpacing, laidInWater));
+            walked = route;
+            if (unrouted && !painted.isEmpty())
+            {
+
+                final int laid = painted.size() - doorstep;
+                final String carved = laid > 0 ? "the straight line is carved (" + laid + " blocks)" : "the straight line lays nothing either, the doorstep alone stands";
+                if (walkFresh)
+                {
+
+                    ColonyAutopilot.LOGGER.debug("[{}] no routed road from {} to {} (refused within the game-day, the router was not asked again) — {}",
+                      colony.getName(), elbow.toShortString(), target.toShortString(), carved);
+                }
+                else
+                {
+                    ColonyAutopilot.LOGGER.info("[{}] no routed road from {} to {} — {} (the router's and the carver's debug lines say why)",
+                      colony.getName(), elbow.toShortString(), target.toShortString(), carved);
+                }
+            }
             if (painted.isEmpty())
             {
                 route = RoadRouter.route(level, colony, pathStart, target, targetTop, targetBox, reach, guarded, junctions, null,
                   survey, RoadRouter.CARVE_BUDGET);
-                painted.addAll(VillagePaths.connect(level, pathStart, true, target, guarded, guarded, liveRoads, junctions, lastCarve,
-                  route == null || route.isEmpty() ? null : route, null, blind, reach, lampSpacing));
+                walked = route == null || route.isEmpty() ? null : route;
+                painted.addAll(VillagePaths.connect(level, pathStart, true, target, guarded, guarded, fisherWater, liveRoads, junctions, lastCarve,
+                  walked, null, blind, reach, lampSpacing, laidInWater));
+                if (route == null && !painted.isEmpty())
+                {
+
+                    final String straight = "[{}] no routed road from the {}'s door at {} to {} — the straight line is carved from the door ({} blocks) (the router's and the carver's debug lines say why)";
+                    if (walkFresh)
+                    {
+                        ColonyAutopilot.LOGGER.debug(straight, colony.getName(), door, pathStart.toShortString(), target.toShortString(), painted.size());
+                    }
+                    else
+                    {
+                        ColonyAutopilot.LOGGER.info(straight, colony.getName(), door, pathStart.toShortString(), target.toShortString(), painted.size());
+                    }
+                }
             }
         }
         lastCarveSpent = RoadRouter.CARVE_BUDGET - survey.budgetLeft();
         if (painted.isEmpty())
         {
+
+            if (!"nothing laid".equals(lastBreak.computeIfAbsent(ColonyAutopilot.colonyKey(colony), k -> new HashMap<>()).put(anchor, "nothing laid")))
+            {
+                ColonyAutopilot.LOGGER.info("[{}] no road could be laid from the {}'s door at {} toward {} (the carver's debug lines say what stands in the way){}",
+                  colony.getName(), door, pathStart.toShortString(), target.toShortString(), previous != null ? " — the road it had stays" : "");
+            }
             return false;
         }
         final int roadEnd = painted.size();
@@ -5812,8 +7166,16 @@ public class GrowthDirector
                 }
             }
 
-            final List<BlockPos> kept = VillagePaths.erase(level, previous, spare, blind);
-            painted.addAll(kept);
+            final List<BlockPos> kept = VillagePaths.erase(level, previous, spare, blind, laidInWater);
+
+            if (painted.isEmpty())
+            {
+                painted.addAll(kept);
+            }
+            else
+            {
+                painted.addAll(painted.size() - 1, kept);
+            }
             final Set<Long> stillStanding = new HashSet<>();
             for (final BlockPos block : kept)
             {
@@ -5833,15 +7195,25 @@ public class GrowthDirector
         if (changed)
         {
             bootChanged.add(ColonyAutopilot.colonyKey(colony));
+
+            orphanRoads.remove(ColonyAutopilot.colonyKey(colony));
         }
         ledger.put(anchor, painted);
+        long[] line = null;
+        if (walked != null)
+        {
+            line = new long[walked.size()];
+            for (int k = 0; k < line.length; k++)
+            {
+                line[k] = BlockPos.asLong(walked.get(k)[0], 0, walked.get(k)[1]);
+            }
+        }
+        ColonyGrounds.get(level).setRoadLine(colony.getID(), anchor, line);
         saveRoads(colony, level);
 
         if (blind.isEmpty())
         {
             final String broken = VillagePaths.breakIn(level, painted, roadEnd, pathStart);
-            final IBuilding owner = colony.getServerBuildingManager().getBuilding(anchor);
-            final String door = owner != null ? SiteSelector.plainName(owner) : "building at " + anchor.toShortString();
             final Map<BlockPos, String> breaks = lastBreak.computeIfAbsent(ColonyAutopilot.colonyKey(colony), k -> new HashMap<>());
             if (broken == null)
             {
@@ -5957,6 +7329,11 @@ public class GrowthDirector
                     {
 
                         final BlockPos base = pos.immutable().relative(out, step);
+
+                        if (!WorldUtil.isChunkLoaded(level, base.getX() >> 4, base.getZ() >> 4))
+                        {
+                            continue;
+                        }
                         if ((level.getBlockState(base).is(Blocks.DIRT_PATH) && ownRoad.contains(base.asLong()))
                               || (level.getBlockState(base.above()).is(Blocks.DIRT_PATH) && ownRoad.contains(base.above().asLong())))
                         {
@@ -5977,7 +7354,7 @@ public class GrowthDirector
                     if (dug > 0)
                     {
                         ColonyAutopilot.LOGGER.info("[{}] dug the {}'s doorway at {} back out — {} block(s) had buried it",
-                          building.getColony().getName(), building.getBuildingDisplayName(), pos.toShortString(), dug);
+                          building.getColony().getName(), SiteSelector.plainName(building), pos.toShortString(), dug);
                     }
                 }
             }

@@ -11,6 +11,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.Block;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public final class BuilderCap
@@ -70,6 +71,9 @@ public final class BuilderCap
         int builders = 0;
         int builderHuts = 0;
         int jobs = 0;
+        final List<WorkOrderBuilding> orders = colony.getWorkManager().getWorkOrdersOfType(WorkOrderBuilding.class);
+
+        final boolean buildsOn = AutopilotConfig.get(colony, AutopilotConfig.AUTO_BUILD_PLACED_HUTS);
         for (final IBuilding building : colony.getServerBuildingManager().getBuildings().values())
         {
             final Block hut = building.getBuildingType().getBuildingBlock();
@@ -84,6 +88,8 @@ public final class BuilderCap
             }
 
             if (building.getBuildingLevel() == 0 && building.getMaxBuildingLevel() > 0
+
+                  && (buildsOn || UpgradeDirector.hasOpenOrder(building, orders))
                   && !UpgradeDirector.tornDown(building)
                   && !(AutopilotConfig.live(colony, AutopilotConfig.NO_GRAVES) && hut == ModBlocks.blockHutGraveyard)
                   && (upgrades == null || !upgrades.parked(colony, building.getID()))
@@ -93,7 +99,7 @@ public final class BuilderCap
             }
         }
 
-        for (final WorkOrderBuilding order : colony.getWorkManager().getWorkOrdersOfType(WorkOrderBuilding.class))
+        for (final WorkOrderBuilding order : orders)
         {
             if (order.getWorkOrderType() == WorkOrderType.UPGRADE)
             {
@@ -120,7 +126,10 @@ public final class BuilderCap
         {
             if (load.jobs() >= load.cap())
             {
-                return hold(colony, placementHeld, "placement held: " + load.jobs() + " of " + load.cap() + " builder jobs in flight");
+
+                return hold(colony, placementHeld, "placement held: " + load.jobs() + " of " + load.cap() + " builder jobs in flight"
+                  + (load.cap() > 0 ? "" : AutopilotConfig.buildsPlacedHuts(colony) ? " — no Builder's Hut is built yet"
+                       : " — no Builder's Hut is built yet, and first builds are yours (switched off under autoupgrade): press Build in one"));
             }
             final ColonyGrounds grounds = ColonyGrounds.get(level);
             if (hallLevel(colony) < ESTABLISHED_HALL_LEVEL)
@@ -133,14 +142,14 @@ public final class BuilderCap
             else
             {
                 final int since = grounds.upgradesSinceLastPlacement(colony.getID());
-                final int wanted = AutopilotConfig.ECONOMY_UPGRADES_PER_PLACEMENT.get();
+                final int wanted = upgradesPerPlacement(colony);
                 if (since < wanted)
                 {
                     if (upgradeDue(colony))
                     {
-                        return hold(colony, placementHeld, "placement waits for the upgrades: " + since + " of " + wanted + " started since the last placement");
+                        return hold(colony, placementHeld, "placement waits for the upgrades: " + since + " of " + wanted + " started since the last placement" + shortageNote(wanted));
                     }
-                    note(colony, quotaWaivedLogged, "builder cap: no upgrade is due — the placement goes ahead after " + since + " of " + wanted + " upgrades");
+                    note(colony, quotaWaivedLogged, "builder cap: no upgrade is due — the placement goes ahead after " + since + " of " + wanted + " upgrades" + shortageNote(wanted));
                 }
             }
         }
@@ -181,10 +190,10 @@ public final class BuilderCap
             {
 
                 final int since = grounds.upgradesSinceLastPlacement(colony.getID());
-                final int quota = AutopilotConfig.ECONOMY_UPGRADES_PER_PLACEMENT.get();
+                final int quota = upgradesPerPlacement(colony);
                 if (since >= quota)
                 {
-                    return hold(colony, upgradeHeld, "upgrade waits its turn: " + since + " of " + quota + " upgrades started since the last placement and a placement is due");
+                    return hold(colony, upgradeHeld, "upgrade waits its turn: " + since + " of " + quota + " upgrades started since the last placement and a placement is due" + shortageNote(quota));
                 }
             }
         }
@@ -217,8 +226,9 @@ public final class BuilderCap
         final Load load = load(colony);
         if (kind == Kind.PLACEMENT)
         {
-            ColonyAutopilot.LOGGER.debug("[{}] builder cap: a placement started after {} upgrades — {} of {} builder jobs in flight, town hall level {}",
-              colony.getName(), since, load.jobs(), load.cap(), hallLevel(colony));
+            ColonyAutopilot.LOGGER.debug("[{}] builder cap: a placement started after {} upgrades{} — {} of {} builder jobs in flight, town hall level {}",
+              colony.getName(), since, hallLevel(colony) >= ESTABLISHED_HALL_LEVEL ? shortageNote(upgradesPerPlacement(colony)) : "",
+              load.jobs(), load.cap(), hallLevel(colony));
         }
         else
         {
@@ -234,6 +244,14 @@ public final class BuilderCap
         placementWantedAt.remove(key);
     }
 
+    static void padUnderway(final IColony colony, final ServerLevel level)
+    {
+        if (AutopilotConfig.progressionMode(colony))
+        {
+            placementWantedAt.put(ColonyAutopilot.colonyKey(colony), level.getGameTime());
+        }
+    }
+
     public static String holdText(final IColony colony)
     {
         final ColonyId key = ColonyAutopilot.colonyKey(colony);
@@ -241,6 +259,17 @@ public final class BuilderCap
         final Long asked = placementWantedAt.get(key);
         return reason == null || asked == null || colony.getWorld() == null
                  || colony.getWorld().getGameTime() - asked > PLACEMENT_WISH_TICKS ? "" : reason;
+    }
+
+    private static int upgradesPerPlacement(final IColony colony)
+    {
+        final int configured = AutopilotConfig.ECONOMY_UPGRADES_PER_PLACEMENT.get();
+        return GrowthDirector.shortOfPlots(colony) ? Math.min(configured, 1) : configured;
+    }
+
+    private static String shortageNote(final int quota)
+    {
+        return quota < AutopilotConfig.ECONOMY_UPGRADES_PER_PLACEMENT.get() ? " (one while the village is short of plots)" : "";
     }
 
     private static int hallLevel(final IColony colony)

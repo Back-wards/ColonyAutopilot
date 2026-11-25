@@ -6,18 +6,22 @@ import com.minecolonies.api.colony.IColony;
 import com.minecolonies.api.colony.IColonyManager;
 import com.minecolonies.api.entity.citizen.AbstractEntityCitizen;
 import com.minecolonies.api.items.component.ColonyId;
+import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.ServerFunctionManager;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.damagesource.DamageType;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.MobSpawnType;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.item.Item;
@@ -35,8 +39,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
 import java.util.Set;
+import java.util.UUID;
 
-final class SporeCompat
+public final class SporeCompat
 {
     static final String MOD_ID = "spore";
 
@@ -159,9 +164,15 @@ final class SporeCompat
         return level.getScoreboard().getObjective(REDNIGHT_MARKER) != null;
     }
 
+    private static final ResourceLocation REDNIGHT_FUNCTION = ResourceLocation.fromNamespaceAndPath("inqui", "summon_primordial_mound");
+
     private boolean rednightSettled = false;
 
     private int rednightTick = 0;
+
+    private boolean awaitingMound = false;
+
+    private boolean rednightMissingWarned = false;
 
     private long countdownSaid = -1;
 
@@ -178,11 +189,15 @@ final class SporeCompat
     {
         rednightSettled = false;
         rednightTick = 0;
+        awaitingMound = false;
+        rednightMissingWarned = false;
         countdownSaid = -1;
         nurseTick = 4;
         infectedSince.clear();
         cureWaitLogged.clear();
         shieldAnnounced.clear();
+        quietTold.clear();
+        quietLogged = false;
     }
 
     @net.neoforged.bus.api.SubscribeEvent
@@ -233,13 +248,34 @@ final class SporeCompat
         {
             return;
         }
+
+        final ServerFunctionManager functions = event.getServer().getFunctions();
+        final var rednight = functions.get(REDNIGHT_FUNCTION);
+        if (rednight.isEmpty())
+        {
+            if (!rednightMissingWarned)
+            {
+                rednightMissingWarned = true;
+                ColonyAutopilot.LOGGER.warn("The quiet years are over (day {}) but the rednight cannot fall: this Spore Inquisition has no function {}. Nothing was summoned and nothing is marked as delivered; it is looked for again every 600 ticks",
+                  graceDays, REDNIGHT_FUNCTION);
+            }
+            return;
+        }
         level.getScoreboard().addObjective(REDNIGHT_MARKER, net.minecraft.world.scores.criteria.ObjectiveCriteria.DUMMY,
           net.minecraft.network.chat.Component.literal(REDNIGHT_MARKER),
           net.minecraft.world.scores.criteria.ObjectiveCriteria.RenderType.INTEGER, false, null);
         rednightSettled = true;
-        event.getServer().getCommands().performPrefixedCommand(
-          event.getServer().createCommandSourceStack().withSuppressedOutput(),
-          "function inqui:summon_primordial_mound");
+        awaitingMound = true;
+
+        functions.execute(rednight.get(), functions.getGameLoopSender());
+        if (awaitingMound)
+        {
+
+            awaitingMound = false;
+            ColonyAutopilot.LOGGER.warn("The quiet years are over (day {}) and the rednight's function {} was run, but no spore:mound joined the world: its summon failed, or another mod refused the mound. The rednight counts as delivered and is not tried again; to bring it by hand, run 'function {}' from the server console (it lands over the world spawn)",
+              graceDays, REDNIGHT_FUNCTION, REDNIGHT_FUNCTION);
+            return;
+        }
         ColonyAutopilot.LOGGER.info("The quiet years are over — day {} has come and the rednight falls over the world spawn (SI's own once-per-world drop was consumed by the grace period; this is its scheduled return)",
           graceDays);
     }
@@ -255,19 +291,103 @@ final class SporeCompat
         }
 
         final net.minecraft.nbt.CompoundTag data = event.getEntity().getPersistentData();
-        final int graceDays = AutopilotConfig.SPORES_GRACE_DAYS.get();
 
         if (event.loadedFromDisk() || data.getBoolean(GRACE_SEEN_TAG)
               || (event.getEntity() instanceof Projectile projectile && projectile.getOwner() instanceof Player)
-              || graceDays <= 0 || level.getGameTime() >= graceDays * 24000L || rednightFallen(level))
+              || !quiet(level))
         {
             data.putBoolean(GRACE_SEEN_TAG, true);
+            if (awaitingMound && BuiltInRegistries.ENTITY_TYPE.getKey(event.getEntity().getType()).getPath().equals("mound"))
+            {
+                awaitingMound = false;
+            }
             return;
         }
+        if (!quietLogged)
+        {
+            quietLogged = true;
+            ColonyAutopilot.LOGGER.info("The quiet years hold Spore's own spawns (first held this session: {}): the world is younger than spores.gracePeriodDays = {} game-days. A player's spawn egg and typed /summon pass; a console's, a command block's and a datapack's summons do not. '/colonyautopilot set spores.gracePeriodDays 0' ends the quiet at once; with Spore Inquisition set 1 instead, which keeps its rednight and ends the quiet once the world is a day old (0 there means no rednight at all)",
+              BuiltInRegistries.ENTITY_TYPE.getKey(event.getEntity().getType()), AutopilotConfig.SPORES_GRACE_DAYS.get());
+        }
+
+        event.getEntity().removeVehicle();
+        event.getEntity().getPassengers().forEach(Entity::removeVehicle);
         event.setCanceled(true);
     }
 
     private static final String GRACE_SEEN_TAG = ColonyAutopilot.MOD_ID + ":grace_seen";
+
+    private static boolean quiet(final ServerLevel level)
+    {
+        final int graceDays = AutopilotConfig.SPORES_GRACE_DAYS.get();
+        return graceDays > 0 && level.getGameTime() < graceDays * 24000L && !rednightFallen(level);
+    }
+
+    private static final Set<UUID> quietTold = new HashSet<>();
+
+    private static boolean quietLogged = false;
+
+    @net.neoforged.bus.api.SubscribeEvent
+    public void onEggSpawn(final net.neoforged.neoforge.event.entity.living.FinalizeSpawnEvent event)
+    {
+
+        if (event.getSpawnType() != MobSpawnType.SPAWN_EGG || !isSporeEntity(event.getEntity()))
+        {
+            return;
+        }
+        event.getEntity().getPersistentData().putBoolean(GRACE_SEEN_TAG, true);
+        final ServerLevel level = event.getLevel().getLevel();
+        if (quiet(level))
+        {
+            tellQuiet(level, level.getNearestPlayer(event.getEntity(), 8));
+        }
+    }
+
+    public static void playerSummon(final CommandSourceStack source, final Entity summoned)
+    {
+        if (!(source.source instanceof ServerPlayer player))
+        {
+            return;
+        }
+        final List<Entity> spores = summoned.getSelfAndPassengers().filter(SporeCompat::isSporeEntity).toList();
+        spores.forEach(entity -> entity.getPersistentData().putBoolean(GRACE_SEEN_TAG, true));
+        if (!spores.isEmpty() && quiet(source.getLevel()))
+        {
+            tellQuiet(source.getLevel(), player);
+        }
+    }
+
+    private static void tellQuiet(final ServerLevel level, final Player player)
+    {
+        if (player == null || !quietTold.add(player.getUUID()))
+        {
+            return;
+        }
+        final int graceDays = AutopilotConfig.SPORES_GRACE_DAYS.get();
+        final long daysLeft = (graceDays * 24000L - level.getGameTime() + 23999L) / 24000L;
+        final String set = "/colonyautopilot set spores.gracePeriodDays ";
+        final String ending;
+        if (!ModList.get().isLoaded("sporeinquisition"))
+        {
+            ending = "To let Spore loose now: " + set + "0";
+        }
+        else if (level.getGameTime() >= 24000L)
+        {
+            ending = "To let Spore loose now: " + set + "1 (the rednight falls with it; 0 would mean no rednight at all)";
+        }
+        else
+        {
+
+            final long minutes = (long) Math.ceil((24000L - level.getGameTime()) / (level.tickRateManager().tickrate() * 60D));
+            ending = (graceDays == 1 ? "Spore comes loose, and the rednight falls," : set + "1 frees it, and brings the rednight,")
+                       + " once the world is a day old (in about " + minutes + " minute" + (minutes == 1 ? "" : "s") + "); "
+                       + (graceDays == 1 ? set : "") + "0 frees it at once, but then no rednight comes at all";
+        }
+        player.sendSystemMessage(net.minecraft.network.chat.Component.literal("Colony Autopilot: Spore is held back for " + daysLeft
+          + " more game-day" + (daysLeft == 1 ? "" : "s") + " (spores.gracePeriodDays). Your spawn eggs and /summon work; nothing of Spore's"
+          + " spawns by itself, and what your creature spawns or turns into is held too, but not the creep it spreads over the ground. "
+          + ending));
+    }
 
     private final Set<ColonyId> shieldAnnounced = new HashSet<>();
 
@@ -275,12 +395,39 @@ final class SporeCompat
 
     private static final Set<String> GRIEF_DESPITE_RULE = Set.of("proto", "hivetumor");
 
+    private record SporeKind(net.minecraft.world.entity.EntityType<?> type, boolean spore, boolean griefsDespiteRule, boolean paintsCreep, String id)
+    {
+    }
+
+    private static final Map<net.minecraft.world.entity.EntityType<?>, SporeKind> KINDS = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static SporeKind lastKind;
+
+    private static SporeKind kindOf(final net.minecraft.world.entity.EntityType<?> type)
+    {
+        SporeKind kind = lastKind;
+        if (kind != null && kind.type() == type)
+        {
+            return kind;
+        }
+        kind = KINDS.get(type);
+        if (kind == null)
+        {
+            final ResourceLocation id = BuiltInRegistries.ENTITY_TYPE.getKey(type);
+            final boolean spore = id.getNamespace().equals(MOD_ID);
+            kind = new SporeKind(type, spore, spore && GRIEF_DESPITE_RULE.contains(id.getPath()), spore && CREEP_PAINTERS.contains(id.getPath()), id.toString());
+            KINDS.put(type, kind);
+        }
+        lastKind = kind;
+        return kind;
+    }
+
     @net.neoforged.bus.api.SubscribeEvent(priority = net.neoforged.bus.api.EventPriority.HIGHEST)
     public void onGriefDespiteRule(final net.neoforged.neoforge.event.entity.EntityMobGriefingEvent event)
     {
 
-        if (event.getEntity().level() instanceof ServerLevel && isSporeEntity(event.getEntity()) && !event.isMobGriefingEnabled()
-              && GRIEF_DESPITE_RULE.contains(BuiltInRegistries.ENTITY_TYPE.getKey(event.getEntity().getType()).getPath())
+        if (!event.isMobGriefingEnabled() && kindOf(event.getEntity().getType()).griefsDespiteRule()
+              && event.getEntity().level() instanceof ServerLevel
               && AutopilotConfig.live(AutopilotConfig.DISABLE_MOB_GRIEFING))
         {
             event.setCanGrief(true);
@@ -290,15 +437,19 @@ final class SporeCompat
     @net.neoforged.bus.api.SubscribeEvent
     public void onSporeGriefing(final net.neoforged.neoforge.event.entity.EntityMobGriefingEvent event)
     {
-        if (!AutopilotConfig.masterOn()
-              || !event.canGrief()
-              || !isSporeEntity(event.getEntity())
-              || !(event.getEntity().level() instanceof ServerLevel level))
+
+        if (!event.canGrief())
         {
             return;
         }
-        final ResourceLocation id = BuiltInRegistries.ENTITY_TYPE.getKey(event.getEntity().getType());
-        if (AutopilotConfig.SPORE_DEMOLITION_RIGHTS.get().contains(id.toString()))
+        final SporeKind kind = kindOf(event.getEntity().getType());
+        if (!kind.spore()
+              || !(event.getEntity().level() instanceof ServerLevel level)
+              || !AutopilotConfig.masterOn())
+        {
+            return;
+        }
+        if (AutopilotConfig.SPORE_DEMOLITION_RIGHTS.get().contains(kind.id()))
         {
             return;
         }
@@ -308,7 +459,7 @@ final class SporeCompat
         {
             return;
         }
-        if (!CREEP_PAINTERS.contains(id.getPath()))
+        if (!kind.paintsCreep())
         {
             event.setCanGrief(false);
             return;
@@ -492,7 +643,7 @@ final class SporeCompat
 
     static boolean isSporeEntity(final Entity entity)
     {
-        return entity != null && BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).getNamespace().equals(MOD_ID);
+        return entity != null && kindOf(entity.getType()).spore();
     }
 
     static boolean isSporeBlock(final Block block)

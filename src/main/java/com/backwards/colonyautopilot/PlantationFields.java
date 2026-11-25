@@ -59,8 +59,14 @@ final class PlantationFields
 
     private static final int HOME_REACH = 48;
 
-    record Design(String pack, String path, Set<String> plants)
+    record Design(String pack, String path, Set<String> plants, SiteSelector.Footprint reach)
     {
+
+        SiteSelector.Footprint ground(final BlockPos at, final int margin)
+        {
+            return new SiteSelector.Footprint(at.getX() + reach.minX() - margin, at.getZ() + reach.minZ() - margin,
+              at.getX() + reach.maxX() + margin, at.getZ() + reach.maxZ() + margin);
+        }
     }
 
     private static final Map<String, List<Design>> designs = new HashMap<>();
@@ -73,7 +79,7 @@ final class PlantationFields
     {
     }
 
-    private static final Set<GlobalPos> NO_GROUND_WARNED = new HashSet<>();
+    private static final Map<GlobalPos, Design> NO_GROUND_WARNED = new HashMap<>();
 
     static void clearDesigns()
     {
@@ -140,7 +146,9 @@ final class PlantationFields
                     final Set<String> carried = plantsOf(blueprint, plants);
                     if (!carried.isEmpty())
                     {
-                        list.add(new Design(pack, folder + "/" + blueprint.getFileName() + ".blueprint", carried));
+                        final BlockPos fieldBlock = blueprint.getPrimaryBlockOffset();
+                        list.add(new Design(pack, folder + "/" + blueprint.getFileName() + ".blueprint", carried, new SiteSelector.Footprint(
+                          -fieldBlock.getX(), -fieldBlock.getZ(), blueprint.getSizeX() - 1 - fieldBlock.getX(), blueprint.getSizeZ() - 1 - fieldBlock.getZ())));
                     }
                 }
                 return list;
@@ -302,7 +310,8 @@ final class PlantationFields
         }
         for (final WorkOrderPlantationField order : colony.getWorkManager().getWorkOrdersOfType(WorkOrderPlantationField.class))
         {
-            comingTo(planters, homeOf(all, order.getLocation()), plantsOrdered(order.getStructurePack(), order.getStructurePath()));
+            final Design ordered = ordered(order.getStructurePack(), order.getStructurePath());
+            comingTo(planters, homeOf(all, order.getLocation()), ordered == null ? Set.of() : ordered.plants());
         }
         for (final Map.Entry<GlobalPos, Design> chosen : choosing.entrySet())
         {
@@ -313,8 +322,12 @@ final class PlantationFields
             }
         }
 
+        final List<SiteSelector.Footprint> kept = new ArrayList<>(obstacles);
+        kept.addAll(fieldGround(colony));
+
         final GlobalPos tendedKey = GlobalPos.of(level.dimension(), tendedAt);
-        if (NO_GROUND_WARNED.contains(tendedKey) && findPlot(level, colony, tended.building, all, obstacles, roadBand) != null)
+        final Design unplaced = NO_GROUND_WARNED.get(tendedKey);
+        if (unplaced != null && findPlot(level, colony, tended.building, all, kept, roadBand, unplaced) != null)
         {
             NO_GROUND_WARNED.remove(tendedKey);
         }
@@ -330,15 +343,14 @@ final class PlantationFields
             }
         }
 
-        final List<SiteSelector.Footprint> kept = new ArrayList<>(obstacles);
         for (final String plant : tended.wanted)
         {
             final Design design = tend.designFor.get(plant);
-            final BlockPos plot = findPlot(level, colony, tended.building, all, kept, roadBand);
+            final BlockPos plot = findPlot(level, colony, tended.building, all, kept, roadBand, design);
             if (plot == null)
             {
 
-                if (NO_GROUND_WARNED.add(tendedKey))
+                if (NO_GROUND_WARNED.put(tendedKey, design) == null)
                 {
                     ColonyAutopilot.LOGGER.warn("[{}] no ground for a plantation field near the Plantation at {} — none level within reach, and none gentle enough to grade (a spread of at most {}), clear of buildings and roads inside the claim; looking again each day",
                       colony.getName(), tendedAt.toShortString(), GRADE_SPREAD);
@@ -347,7 +359,7 @@ final class PlantationFields
             }
             commission(level, colony, tendedAt, plot, design);
             tended.notes.add("commissioned a " + fieldName(design) + " field at " + plot.toShortString() + " for its " + tend.name(plant));
-            kept.add(new SiteSelector.Footprint(plot.getX() - 9, plot.getZ() - 9, plot.getX() + 9, plot.getZ() + 9));
+            kept.add(design.ground(plot, 2));
         }
 
         for (final Planter planter : planters.values())
@@ -380,6 +392,49 @@ final class PlantationFields
         }
         found.sort(Comparator.comparingLong(building -> building.getPosition().asLong()));
         return found;
+    }
+
+    static List<SiteSelector.Footprint> fieldGround(final IColony colony)
+    {
+        final List<SiteSelector.Footprint> ground = new ArrayList<>();
+        for (final Map.Entry<GlobalPos, Design> chosen : choosing.entrySet())
+        {
+
+            if (chosen.getKey().dimension().equals(colony.getDimension()) && colony.isCoordInColony(colony.getWorld(), chosen.getKey().pos()))
+            {
+                ground.add(chosen.getValue().ground(chosen.getKey().pos(), 2));
+            }
+        }
+        for (final WorkOrderPlantationField order : colony.getWorkManager().getWorkOrdersOfType(WorkOrderPlantationField.class))
+        {
+            final Design ordered = ordered(order.getStructurePack(), order.getStructurePath());
+            if (ordered != null)
+            {
+                ground.add(ordered.ground(order.getLocation(), 2));
+            }
+        }
+        final Map<BlockPos, Set<String>> built = new HashMap<>();
+        for (final IBuildingExtension extension : colony.getServerBuildingManager().getBuildingExtensions(extension -> extension instanceof PlantationField))
+        {
+
+            if (colony.getServerBuildingManager().getBuilding(extension.getPosition()) == null)
+            {
+                built.computeIfAbsent(extension.getPosition(), at -> new HashSet<>()).add(((PlantationField) extension).getModule().getFieldTag());
+            }
+        }
+
+        final List<Design> own = designs.getOrDefault(colony.getStructurePack(), List.of());
+        for (final Design design : own.isEmpty() ? designs.getOrDefault(ORIGINAL_PACK, List.of()) : own)
+        {
+            for (final Map.Entry<BlockPos, Set<String>> field : built.entrySet())
+            {
+                if (design.plants().equals(field.getValue()))
+                {
+                    ground.add(design.ground(field.getKey(), 2));
+                }
+            }
+        }
+        return ground;
     }
 
     private static IBuilding homeOf(final List<IBuilding> plantations, final BlockPos pos)
@@ -483,7 +538,7 @@ final class PlantationFields
         void plan(final Planter planter, final List<Planter> earlier)
         {
             final GlobalPos key = GlobalPos.of(level.dimension(), planter.building.getPosition());
-            final boolean mayOrder = !NO_GROUND_WARNED.contains(key);
+            final boolean mayOrder = !NO_GROUND_WARNED.containsKey(key);
             final Set<String> growing = new HashSet<>(planter.owned.keySet());
             growing.addAll(planter.coming);
             int slots = maxPlants(planter.building) - growing.size();
@@ -517,7 +572,8 @@ final class PlantationFields
             final Set<String> let = new HashSet<>();
             for (final String plant : twice)
             {
-                if (open.isEmpty() || open.size() <= slots)
+
+                if (slots < 0 || open.isEmpty() || open.size() <= slots)
                 {
                     break;
                 }
@@ -726,16 +782,16 @@ final class PlantationFields
         return plant != null && (needs == null || colony.getResearchManager().getResearchEffects().getEffectStrength(needs) > 0);
     }
 
-    private static Set<String> plantsOrdered(final String pack, final String path)
+    static Design ordered(final String pack, final String path)
     {
         for (final Design design : designs.getOrDefault(pack, List.of()))
         {
             if (design.path().equals(path))
             {
-                return design.plants();
+                return design;
             }
         }
-        return Set.of();
+        return null;
     }
 
     private static int maxPlants(final IBuilding plantation)
@@ -749,8 +805,6 @@ final class PlantationFields
         return colony.getResearchManager().getResearchEffects().getEffectStrength(ResearchConstants.PLANTATION_LARGE) > 0
                  ? base + 1 : base;
     }
-
-    private static final int PLOT_HALF = 7;
 
     private static final int GRADE_SPREAD = 6;
 
@@ -777,26 +831,31 @@ final class PlantationFields
     }
 
     private static BlockPos findPlot(final ServerLevel level, final IColony colony, final IBuilding plantation, final List<IBuilding> plantations,
-      final List<SiteSelector.Footprint> obstacles, final Set<Long> roadBand)
+      final List<SiteSelector.Footprint> obstacles, final Set<Long> roadBand, final Design design)
     {
         final BlockPos anchor = plantation.getPosition();
+        final SiteSelector.Footprint reach = design.reach();
         BlockPos gentlest = null;
         int gentlestSpread = GRADE_SPREAD + 1;
         for (final int[] offset : PLOT_RING)
         {
             final int cx = anchor.getX() + offset[0];
             final int cz = anchor.getZ() + offset[1];
+            final int minX = cx + reach.minX();
+            final int minZ = cz + reach.minZ();
+            final int maxX = cx + reach.maxX();
+            final int maxZ = cz + reach.maxZ();
 
             boolean boxed = false;
             for (final SiteSelector.Footprint box : obstacles)
             {
-                if (box.intersects(cx - PLOT_HALF, cz - PLOT_HALF, cx + PLOT_HALF, cz + PLOT_HALF))
+                if (box.intersects(minX, minZ, maxX, maxZ))
                 {
                     boxed = true;
                     break;
                 }
             }
-            if (boxed || onRoad(cx, cz, roadBand) || !WorldUtil.isChunkLoaded(level, cx >> 4, cz >> 4))
+            if (boxed || onRoad(minX, minZ, maxX, maxZ, roadBand) || !WorldUtil.isChunkLoaded(level, cx >> 4, cz >> 4))
             {
                 continue;
             }
@@ -806,18 +865,25 @@ final class PlantationFields
             {
                 continue;
             }
+
+            boolean ours = true;
+            for (int chunkX = minX >> 4; chunkX <= maxX >> 4 && ours; chunkX++)
+            {
+                for (int chunkZ = minZ >> 4; chunkZ <= maxZ >> 4 && ours; chunkZ++)
+                {
+                    ours = WorldUtil.isChunkLoaded(level, chunkX, chunkZ) && colony.isCoordInColony(level, new BlockPos(chunkX << 4, center.getY(), chunkZ << 4));
+                }
+            }
+            if (!ours)
+            {
+                continue;
+            }
             int min = center.getY();
             int max = center.getY();
-            for (final int[] corner : new int[][] {{cx - PLOT_HALF, cz - PLOT_HALF}, {cx + PLOT_HALF, cz - PLOT_HALF}, {cx - PLOT_HALF, cz + PLOT_HALF}, {cx + PLOT_HALF, cz + PLOT_HALF}})
+            for (final int[] corner : new int[][] {{minX, minZ}, {maxX, minZ}, {minX, maxZ}, {maxX, maxZ}})
             {
-                if (!WorldUtil.isChunkLoaded(level, corner[0] >> 4, corner[1] >> 4))
-                {
-                    min = Integer.MIN_VALUE;
-                    break;
-                }
                 final int y = SiteSelector.groundHeight(level, corner[0], corner[1]);
-
-                if (!plantable(level, new BlockPos(corner[0], y, corner[1])) || !colony.isCoordInColony(level, new BlockPos(corner[0], y, corner[1])))
+                if (!plantable(level, new BlockPos(corner[0], y, corner[1])))
                 {
                     min = Integer.MIN_VALUE;
                     break;
@@ -844,30 +910,30 @@ final class PlantationFields
         {
             return null;
         }
+        final SiteSelector.Footprint graded = design.ground(gentlest, 0);
         final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-        for (int x = gentlest.getX() - PLOT_HALF; x <= gentlest.getX() + PLOT_HALF; x++)
+        for (int x = graded.minX(); x <= graded.maxX(); x++)
         {
-            for (int z = gentlest.getZ() - PLOT_HALF; z <= gentlest.getZ() + PLOT_HALF; z++)
+            for (int z = graded.minZ(); z <= graded.maxZ(); z++)
             {
                 FarmFields.carveFieldColumn(level, x, gentlest.getY() - 1, z, pos);
             }
         }
 
-        final SiteSelector.Footprint graded = new SiteSelector.Footprint(gentlest.getX() - PLOT_HALF, gentlest.getZ() - PLOT_HALF,
-          gentlest.getX() + PLOT_HALF, gentlest.getZ() + PLOT_HALF);
         final List<SiteSelector.Footprint> keepOut = new ArrayList<>(obstacles);
         keepOut.addAll(SiteSelector.foreignClaims(level, colony, graded.minX() - 40, graded.minZ() - 40, graded.maxX() + 40, graded.maxZ() + 40));
         final VillageGrounds.SkirtResult skirt = VillageGrounds.smoothSkirt(level, graded, gentlest.getY() - 1, keepOut, roadBand);
         ColonyAutopilot.LOGGER.info("[{}] graded a {}x{} plot for a plantation field at {} — no level ground near the Plantation at {}, and this one lay within {} of level; {} blocks smoothed round it",
-          colony.getName(), 2 * PLOT_HALF + 1, 2 * PLOT_HALF + 1, gentlest.toShortString(), anchor.toShortString(), gentlestSpread, skirt.total());
+          colony.getName(), graded.maxX() - graded.minX() + 1, graded.maxZ() - graded.minZ() + 1, gentlest.toShortString(), anchor.toShortString(),
+          gentlestSpread, skirt.total());
         return gentlest;
     }
 
-    private static boolean onRoad(final int cx, final int cz, final Set<Long> roadBand)
+    private static boolean onRoad(final int minX, final int minZ, final int maxX, final int maxZ, final Set<Long> roadBand)
     {
-        for (int x = cx - PLOT_HALF; x <= cx + PLOT_HALF && !roadBand.isEmpty(); x++)
+        for (int x = minX; x <= maxX && !roadBand.isEmpty(); x++)
         {
-            for (int z = cz - PLOT_HALF; z <= cz + PLOT_HALF; z++)
+            for (int z = minZ; z <= maxZ; z++)
             {
                 if (roadBand.contains(BlockPos.asLong(x, 0, z)))
                 {

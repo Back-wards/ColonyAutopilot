@@ -193,7 +193,7 @@ public final class SettingsPayloads
     public static void register(final RegisterPayloadHandlersEvent event)
     {
 
-        final PayloadRegistrar registrar = event.registrar("8");
+        final PayloadRegistrar registrar = event.registrar("9");
         registrar.playToServer(ExchangePayloads.OpenExchange.TYPE, ExchangePayloads.OpenExchange.CODEC, ExchangePayloads::onOpenExchange);
         registrar.playToServer(ExchangePayloads.RelayRoads.TYPE, ExchangePayloads.RelayRoads.CODEC, ExchangePayloads::onRelayRoads);
         registrar.playToServer(OpenSettings.TYPE, OpenSettings.CODEC, SettingsPayloads::onOpen);
@@ -237,7 +237,9 @@ public final class SettingsPayloads
             }
             if (!mayEdit(colony, player))
             {
-                player.sendSystemMessage(Component.translatable("colonyautopilot.settings.denied").withStyle(ChatFormatting.RED));
+
+                player.sendSystemMessage(Component.literal("Only the colony's owner and officers (or an operator) may change the autopilot settings")
+                  .withStyle(ChatFormatting.RED));
 
                 PacketDistributor.sendToPlayer(player, mayLook(colony, player) ? snapshot(colony, player) : denied(colony));
                 return;
@@ -330,7 +332,8 @@ public final class SettingsPayloads
             final boolean locked = ColonySettings.locked(key);
             final boolean global = key.scope() == ColonySettings.Scope.SERVER;
 
-            rows.add(new Row(key.path(), type, String.valueOf(ColonySettings.effective(colony, key)), String.valueOf(ColonySettings.serverValue(key)),
+            rows.add(new Row(key.path(), type, String.valueOf(ColonySettings.effective(colony, key)),
+              String.valueOf(global ? key.def() : ColonySettings.serverValue(key)),
               key.min() == null ? "" : String.valueOf(key.min()), key.max() == null ? "" : String.valueOf(key.max()),
               ColonySettings.isOverridden(colony, key) && !locked && !global, global || locked, !locked && (global ? mayAdminister : mayEdit),
               tooltip(key.comment())));
@@ -342,9 +345,9 @@ public final class SettingsPayloads
         final String saving = progression ? Treasury.reservedFor(colony) : "";
         final Treasury.Goal goal = progression ? Treasury.savingFor(colony) : null;
 
-        final String roads = mayEdit(colony, player) ? GrowthDirector.roadsRefused(colony) : ExchangePayloads.ROADS_DENIED;
+        final String roads = mayEdit ? GrowthDirector.roadsRefused(colony) : ExchangePayloads.ROADS_DENIED;
 
-        return new SettingsSnapshot(new ColonyId(colony.getID(), colony.getDimension()), nameOf(colony), mayEdit(colony, player), rows,
+        return new SettingsSnapshot(new ColonyId(colony.getID(), colony.getDimension()), nameOf(colony), mayEdit, rows,
           progression, Treasury.bucks(colony),
           Treasury.waitingRequests(colony), Treasury.waitingResearch(colony), Treasury.waitingCures(colony),
           hold.length() > MAX_HOLD ? hold.substring(0, MAX_HOLD) : hold,

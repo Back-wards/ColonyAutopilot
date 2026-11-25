@@ -28,6 +28,7 @@ import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.ModList;
+import net.neoforged.neoforge.common.Tags;
 import net.neoforged.neoforge.event.entity.living.LivingDeathEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
@@ -189,7 +190,7 @@ final class GroundsWarden
                             {
                                 shields = buildingBoxes(colony);
                             }
-                            FishingPond.reseal(level, colony, building, shields);
+                            FishingPond.reseal(level, colony, shields);
                             final BlockState hutState = level.getBlockState(building.getPosition());
                             if (hutState.hasProperty(AbstractBlockHut.FACING))
                             {
@@ -429,6 +430,10 @@ final class GroundsWarden
                 for (; y <= highY && scrubbed < budget; y++)
                 {
                     final BlockState state = level.getBlockState(pos.set(x, y, z));
+                    if (naturalMycelium(level, pos, state))
+                    {
+                        continue;
+                    }
                     final Block block = state.getBlock();
                     final Block clean = cure.get(block);
                     if (clean != null)
@@ -485,9 +490,10 @@ final class GroundsWarden
         }
         if (deep && (creepHere || scrubbed > 0))
         {
-            for (int x = chunk.getMinBlockX(); x <= chunk.getMaxBlockX() && scrubbed < budget && TickBudget.has(); x++)
+
+            for (int x = chunk.getMinBlockX(); x <= chunk.getMaxBlockX() && scrubbed < budget; x++)
             {
-                for (int z = chunk.getMinBlockZ(); z <= chunk.getMaxBlockZ() && scrubbed < budget && TickBudget.has(); z++)
+                for (int z = chunk.getMinBlockZ(); z <= chunk.getMaxBlockZ() && scrubbed < budget; z++)
                 {
                     final int floor = shelterFloor(local, x, z);
                     if (floor != Integer.MAX_VALUE && floor != ZONE && floor != EVERY_HEIGHT)
@@ -509,7 +515,7 @@ final class GroundsWarden
         final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         int end = floor - 1;
         BlockState found = level.getBlockState(pos.set(x, end, z));
-        while (end >= floor - FOUNDATION_REACH && hollow(found))
+        while (end >= floor - FOUNDATION_REACH && hollow(level, pos, found))
         {
             found = level.getBlockState(pos.set(x, --end, z));
         }
@@ -540,7 +546,7 @@ final class GroundsWarden
             {
                 break;
             }
-            if (hollow(state))
+            if (hollow(level, pos, state))
             {
                 final Block clean = cure.get(state.getBlock());
                 WorldUtil.setBlockState(level, pos.immutable(), clean != null ? clean.defaultBlockState() : Blocks.DIRT.defaultBlockState());
@@ -553,16 +559,21 @@ final class GroundsWarden
         return filled;
     }
 
-    private static boolean hollow(final BlockState state)
+    private static boolean hollow(final ServerLevel level, final BlockPos pos, final BlockState state)
     {
-        return (state.canBeReplaced() && !state.hasBlockEntity()) || SporeCompat.isInfection(state.getBlock());
+        return (state.canBeReplaced() && !state.hasBlockEntity()) || (SporeCompat.isInfection(state.getBlock()) && !naturalMycelium(level, pos, state));
+    }
+
+    static boolean naturalMycelium(final ServerLevel level, final BlockPos pos, final BlockState state)
+    {
+        return state.is(Blocks.MYCELIUM) && level.getBiome(pos).is(Tags.Biomes.IS_MUSHROOM);
     }
 
     private static int fillHole(final ServerLevel level, final int x, final int z, final int ground, final int budget, final Relaid relaid)
     {
         final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         int filled = 0;
-        for (int y = ground - 1; y >= ground - CREEP_CLEAR_DEPTH && filled < budget && TickBudget.has(); y--)
+        for (int y = ground - 1; y >= ground - CREEP_CLEAR_DEPTH && filled < budget; y--)
         {
             final BlockState state = level.getBlockState(pos.set(x, y, z));
             if (state.getFluidState().is(FluidTags.WATER) && state.canBeReplaced())
@@ -587,7 +598,8 @@ final class GroundsWarden
         {
             y = SiteSelector.groundHeightBelow(level, x, z, y - 1);
         }
-        return SporeCompat.isInfection(level.getBlockState(probe.set(x, y - 1, z)).getBlock()) ? ColonyGrounds.NO_GROUND : y;
+        final BlockState top = level.getBlockState(probe.set(x, y - 1, z));
+        return SporeCompat.isInfection(top.getBlock()) && !naturalMycelium(level, probe, top) ? ColonyGrounds.NO_GROUND : y;
     }
 
     private static BlockState roadBlock(final ServerLevel level, final BlockPos at, final Set<Long> roads)
@@ -677,7 +689,7 @@ final class GroundsWarden
                     {
                         final int cx = x + step[0] * d;
                         final int cz = z + step[1] * d;
-                        if (!WorldUtil.isChunkLoaded(level, cx >> 4, cz >> 4) || inFootprint(sheltered, cx, cz))
+                        if (!WorldUtil.isChunkLoaded(level, cx >> 4, cz >> 4) || SiteSelector.insideAny(sheltered, cx, cz))
                         {
                             break;
                         }
@@ -728,18 +740,6 @@ final class GroundsWarden
         }
     }
 
-    private static boolean inFootprint(final List<SiteSelector.Footprint> footprints, final int x, final int z)
-    {
-        for (final SiteSelector.Footprint fp : footprints)
-        {
-            if (fp.intersects(x, z, x, z))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private void sealClaimLava(final ServerLevel level, final IColony colony)
     {
         if (!AutopilotConfig.live(colony, AutopilotConfig.TERRAFORM_ENABLED))
@@ -757,11 +757,13 @@ final class GroundsWarden
         final int cursor = lavaCursor.getOrDefault(key, 0) % order.length;
 
         final List<SiteSelector.Footprint> sheltered = new ArrayList<>(ProtectedZones.footprintsFor(colony));
+        int villageTop = colony.getCenter().getY();
         for (final IBuilding building : colony.getServerBuildingManager().getBuildings().values())
         {
             if (building.getBuildingLevel() > 0)
             {
                 sheltered.add(SiteSelector.boxOf(building));
+                villageTop = Math.max(villageTop, building.getPosition().getY());
             }
         }
         final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
@@ -785,7 +787,7 @@ final class GroundsWarden
             {
                 for (int z = chunk.getMinBlockZ(); z <= chunk.getMaxBlockZ(); z++)
                 {
-                    if (inFootprint(local, x, z))
+                    if (SiteSelector.insideAny(local, x, z))
                     {
                         continue;
                     }
@@ -801,6 +803,19 @@ final class GroundsWarden
 
                         if (above.getFluidState().isEmpty() && (above.isAir() || above.canBeReplaced()))
                         {
+
+                            if (y > villageTop + 12)
+                            {
+                                int bed = y;
+                                while (bed > level.getMinBuildHeight() && level.getBlockState(pos.set(x, bed - 1, z)).getFluidState().is(FluidTags.LAVA))
+                                {
+                                    bed--;
+                                }
+                                if (!SiteSelector.solidBeneathOrCaveRoof(level, x, z, bed, pos))
+                                {
+                                    continue;
+                                }
+                            }
                             WorldUtil.setBlockState(level, pos.set(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
                             capped++;
                         }
@@ -865,7 +880,7 @@ final class GroundsWarden
             {
                 for (int z = chunk.getMinBlockZ(); z <= chunk.getMaxBlockZ(); z++)
                 {
-                    if (inFootprint(local, x, z))
+                    if (SiteSelector.insideAny(local, x, z))
                     {
                         continue;
                     }
@@ -926,7 +941,7 @@ final class GroundsWarden
                 {
                     final int x = spot.getX() + dx;
                     final int z = spot.getZ() + dz;
-                    if (!WorldUtil.isChunkLoaded(level, x >> 4, z >> 4) || inFootprint(zones, x, z))
+                    if (!WorldUtil.isChunkLoaded(level, x >> 4, z >> 4) || SiteSelector.insideAny(zones, x, z))
                     {
                         continue;
                     }

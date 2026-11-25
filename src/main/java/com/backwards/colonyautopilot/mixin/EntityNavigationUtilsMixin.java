@@ -5,8 +5,14 @@ import com.backwards.colonyautopilot.AutopilotConfig;
 import com.minecolonies.api.colony.IColony;
 import com.minecolonies.api.colony.IColonyManager;
 import com.minecolonies.api.colony.buildings.IBuilding;
+import com.minecolonies.api.entity.ai.ITickingStateAI;
+import com.minecolonies.api.entity.ai.statemachine.states.AIWorkerState;
 import com.minecolonies.api.entity.ai.statemachine.states.CitizenAIState;
 import com.minecolonies.api.entity.other.AbstractFastMinecoloniesEntity;
+import com.minecolonies.core.colony.jobs.AbstractJobCrafter;
+import com.minecolonies.core.entity.ai.workers.crafting.AbstractEntityAICrafting;
+import com.minecolonies.core.entity.ai.workers.crafting.EntityAIWorkAlchemist;
+import com.minecolonies.core.entity.ai.workers.service.EntityAIWorkUndertaker;
 import com.minecolonies.core.entity.citizen.EntityCitizen;
 import com.minecolonies.core.entity.pathfinding.navigation.EntityNavigationUtils;
 import com.minecolonies.core.entity.pathfinding.navigation.MinecoloniesAdvancedPathNavigate;
@@ -20,7 +26,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(EntityNavigationUtils.class)
 public class EntityNavigationUtilsMixin
 {
-    @Inject(method = "walkToBuilding", at = @At("HEAD"), cancellable = true, require = 0)
+    @Inject(method = "walkToBuilding(Lcom/minecolonies/api/entity/other/AbstractFastMinecoloniesEntity;Lcom/minecolonies/api/colony/buildings/IBuilding;)Z",
+      at = @At("HEAD"), cancellable = true, require = 0)
     private static void colonyautopilot$reachedAtAnyHeight(final AbstractFastMinecoloniesEntity entity, final IBuilding building,
       final CallbackInfoReturnable<Boolean> cir)
     {
@@ -37,7 +44,8 @@ public class EntityNavigationUtilsMixin
         final BlockPos at = entity.blockPosition();
         if (building.isInBuilding(at)
               || (colonyautopilot$jobWalk(entity) && walked && Math.abs(at.getY() - building.getPosition().getY()) >= 2
-                    && colonyautopilot$underOrOver(at, building, EntityNavigationUtils.BUILDING_REACH_DIST)))
+                    && colonyautopilot$underOrOver(at, building, EntityNavigationUtils.BUILDING_REACH_DIST)
+                    && !colonyautopilot$asksTheBoxAgain((EntityCitizen) entity)))
         {
             nav.stop();
             cir.setReturnValue(true);
@@ -73,6 +81,23 @@ public class EntityNavigationUtilsMixin
     private static boolean colonyautopilot$jobWalk(final AbstractFastMinecoloniesEntity entity)
     {
         return entity instanceof EntityCitizen citizen && citizen.getCitizenAI().getState() == CitizenAIState.WORKING;
+    }
+
+    private static boolean colonyautopilot$asksTheBoxAgain(final EntityCitizen citizen)
+    {
+        final ITickingStateAI ai = citizen.getCitizenJobHandler().getWorkAI();
+        if (ai instanceof EntityAIWorkUndertaker undertaker)
+        {
+            return undertaker.getState() == AIWorkerState.WANDER;
+        }
+        if (!(ai instanceof AbstractEntityAICrafting<?, ?> crafter))
+        {
+            return false;
+        }
+        return crafter.getState() == AIWorkerState.IDLE
+                 || (crafter instanceof EntityAIWorkAlchemist && crafter.getState() == AIWorkerState.START_WORKING
+                       && citizen.getCitizenJobHandler().getColonyJob() instanceof AbstractJobCrafter<?, ?> job
+                       && (job.getTaskQueue().isEmpty() || job.getCurrentTask() == null));
     }
 
     private static boolean colonyautopilot$underOrOver(final BlockPos at, final IBuilding building, final int reach)

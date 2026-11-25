@@ -6,6 +6,7 @@ import com.minecolonies.api.items.component.ColonyId;
 import com.minecolonies.api.util.WorldUtil;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -129,6 +130,22 @@ public class Terraformer
         return true;
     }
 
+    boolean busy(final IColony colony)
+    {
+        return jobs.containsKey(ColonyAutopilot.colonyKey(colony));
+    }
+
+    boolean cuttingPad(final IColony colony)
+    {
+        final Job job = jobs.get(ColonyAutopilot.colonyKey(colony));
+        return job != null && job.gradeColumns == null;
+    }
+
+    boolean cuttingPadFor(final IColony colony, final Block hut)
+    {
+        return cuttingPad(colony) && jobs.get(ColonyAutopilot.colonyKey(colony)).hut == hut;
+    }
+
     boolean beginGrading(final IColony colony, final ServerLevel level, final java.util.List<int[]> columns)
     {
         final ColonyId key = ColonyAutopilot.colonyKey(colony);
@@ -243,7 +260,7 @@ public class Terraformer
             {
                 TickBudget.spend(1);
                 final int[] column = job.gradeColumns.get(job.gradeCursor++);
-                if (insideZone(zones, column[0], column[1]))
+                if (SiteSelector.insideAny(zones, column[0], column[1]))
                 {
                     continue;
                 }
@@ -277,7 +294,7 @@ public class Terraformer
                 }
                 final int[] tread = job.ramp.get(job.rampCursor++);
 
-                if (!insideZone(zones, tread[0], tread[1]))
+                if (!SiteSelector.insideAny(zones, tread[0], tread[1]))
                 {
                     final int written = levelColumn(job.level, tread[0], tread[1], tread[2] - 1, job.forced ? SiteSelector.FORCED_MAX_CUT : SiteSelector.RAMP_CUT, skyCeiling, pos);
                     writes += written;
@@ -285,7 +302,7 @@ public class Terraformer
                 }
                 continue;
             }
-            if (!insideZone(zones, job.cursorX, job.cursorZ))
+            if (!SiteSelector.insideAny(zones, job.cursorX, job.cursorZ))
             {
                 final int written = levelColumn(job.level, job.cursorX, job.cursorZ, job.targetY, job.forced ? SiteSelector.FORCED_MAX_CUT : MAX_CUT, skyCeiling, pos);
                 writes += written;
@@ -298,18 +315,6 @@ public class Terraformer
             }
         }
         return job.cursorZ > job.maxZ && job.rampCursor >= job.ramp.size();
-    }
-
-    private static boolean insideZone(final java.util.List<SiteSelector.Footprint> zones, final int x, final int z)
-    {
-        for (final SiteSelector.Footprint zone : zones)
-        {
-            if (zone.intersects(x, z, x, z))
-            {
-                return true;
-            }
-        }
-        return false;
     }
 
     private static int levelColumn(final ServerLevel level, final int x, final int z, final int targetY, final int maxCut, final int skyCeiling, final BlockPos.MutableBlockPos pos)
@@ -330,7 +335,8 @@ public class Terraformer
                              ? targetY + maxCut : surfaceTop;
         for (int y = cutTop; y > targetY; y--)
         {
-            if (level.getBlockState(pos.set(x, y, z)).hasBlockEntity())
+            final BlockState state = level.getBlockState(pos.set(x, y, z));
+            if (state.hasBlockEntity() || (state.getDestroySpeed(level, pos) < 0 && !state.canBeReplaced()))
             {
                 return writes;
             }
@@ -356,7 +362,8 @@ public class Terraformer
             {
                 return writes;
             }
-            if (state.canBeReplaced() || !state.getFluidState().isEmpty())
+            if (state.canBeReplaced() || !state.getFluidState().isEmpty() || state.is(BlockTags.LEAVES)
+                  || (y == targetY && SiteSelector.notGround(state) && state.getDestroySpeed(level, pos) >= 0))
             {
                 WorldUtil.setBlockState(level, pos.set(x, y, z), Blocks.DIRT.defaultBlockState());
                 writes++;
@@ -390,7 +397,7 @@ public class Terraformer
                 return writes;
             }
 
-            if (state.isAir() || state.canBeReplaced()
+            if (state.isAir() || state.canBeReplaced() || state.is(BlockTags.LEAVES)
                   || (!state.getFluidState().isEmpty() && !state.hasProperty(BlockStateProperties.WATERLOGGED))
                   || state.is(Blocks.DIRT_PATH) || state.is(Blocks.OAK_FENCE) || state.is(Blocks.GLOWSTONE))
             {

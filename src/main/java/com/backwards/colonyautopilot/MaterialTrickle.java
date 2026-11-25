@@ -1,6 +1,7 @@
 // Colony Autopilot - created by Backwards - https://www.curseforge.com/members/backwards/projects - Copyright (C) 2026 Backwards - GPL-3.0
 package com.backwards.colonyautopilot;
 
+import com.google.common.base.Suppliers;
 import com.minecolonies.api.colony.ICitizenData;
 import com.minecolonies.api.colony.IColony;
 import com.minecolonies.api.colony.buildings.IBuilding;
@@ -22,11 +23,13 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
+import java.util.function.Supplier;
 
 public class MaterialTrickle
 {
@@ -93,7 +96,17 @@ public class MaterialTrickle
             }
 
             final double colonyBudget = AutopilotConfig.get(colony, AutopilotConfig.TRICKLE_ITEMS_PER_MINUTE) * (PERIOD_TICKS / 1200.0);
-            final List<ItemStack> inKind = inKindStock(colony);
+            final Supplier<List<ItemStack>> inKind;
+            try
+            {
+                inKind = inKindStock(colony);
+            }
+            catch (final Exception e)
+            {
+
+                ColonyAutopilot.LOGGER.warn("[{}] the trickle could not read the colony's couriers — no materials for its builds this pass", colony.getName(), e);
+                continue;
+            }
             for (final IBuilding building : colony.getServerBuildingManager().getBuildings().values())
             {
                 if (building instanceof BuildingBuilder hut)
@@ -121,15 +134,17 @@ public class MaterialTrickle
         }
     }
 
-    private static List<ItemStack> inKindStock(final IColony colony)
+    private static Supplier<List<ItemStack>> inKindStock(final IColony colony)
     {
         if (!AutopilotConfig.progressionMode(colony) || !ProvidenceSweep.hasCouriers(colony))
         {
             return null;
         }
-        final List<ItemStack> stock = ProvidenceSweep.warehouseStacks(colony);
-        stock.addAll(ProvidenceSweep.courierStacks(colony));
-        return stock;
+        return Suppliers.memoize(() -> {
+            final List<ItemStack> stock = ProvidenceSweep.warehouseStacks(colony);
+            stock.addAll(ProvidenceSweep.courierStacks(colony));
+            return stock;
+        });
     }
 
     private static String buildName(final BuildingBuilder hut)
@@ -185,7 +200,7 @@ public class MaterialTrickle
         return held;
     }
 
-    private void trickleInto(final BuildingBuilder hut, final double budgetPerPeriod, final List<ItemStack> inKind)
+    private void trickleInto(final BuildingBuilder hut, final double budgetPerPeriod, final Supplier<List<ItemStack>> inKind)
     {
         final Map<String, BuildingBuilderResource> needed = hut.getModule(BuildingModules.BUILDING_RESOURCES).getNeededResources();
         if (needed.isEmpty())
@@ -241,7 +256,7 @@ public class MaterialTrickle
             if (missing > 0 && inKind != null && Exchange.familyValue(resource.getItemStack().getItem()) > 0)
             {
                 int stocked = 0;
-                for (final ItemStack held : inKind)
+                for (final ItemStack held : inKind.get())
                 {
                     if (ItemStackUtils.compareItemStacksIgnoreStackSize(held, resource.getItemStack(), true, true))
                     {
@@ -298,63 +313,97 @@ public class MaterialTrickle
         boolean progress = true;
         int trickledItems = 0;
         int trickledTypes = 0;
-        while (budget >= 1 && !missingOf.isEmpty() && progress && !racksFull && !unpaid)
+
+        final Set<BuildingBuilderResource> blocked = new HashSet<>();
+
+        Map<Item, List<ItemStack>> partFilled = null;
+
+        long owed = 0;
+        try
         {
-            progress = false;
-            final int share = Math.max(1, (int) Math.ceil(budget / missingOf.size()));
-            for (final BuildingBuilderResource resource : order)
+            while (budget >= 1 && missingOf.size() > blocked.size() && progress && !unpaid)
             {
-                final Integer missing = missingOf.get(resource);
-                if (missing == null || budget < 1)
+                progress = false;
+                final int share = Math.max(1, (int) Math.ceil(budget / (missingOf.size() - blocked.size())));
+                for (final BuildingBuilderResource resource : order)
                 {
-                    continue;
-                }
-                final ItemStack stack = resource.getItemStack().copy();
-                final int toInsert = Math.min(Math.min(missing, share), Math.min((int) budget, stack.getMaxStackSize()));
-                stack.setCount(toInsert);
-
-                if (!Treasury.canAfford(hut.getColony(), level, Treasury.cost(stack)))
-                {
-                    if (fundsShortAnnounced.add(hut))
+                    final Integer missing = missingOf.get(resource);
+                    if (missing == null || budget < 1 || blocked.contains(resource))
                     {
-                        ColonyAutopilot.LOGGER.debug("[{}] the treasury cannot pay for the crew's materials at {} — the trickle waits for ColonyBucks",
-                          hut.getColony().getName(), hut.getID().toShortString());
+                        continue;
                     }
-                    unpaid = true;
-                    break;
-                }
-
-                final ItemStack remainder = InventoryUtils.addItemStackToItemHandlerWithResult(racks, stack);
-                final int inserted = toInsert - remainder.getCount();
-                Treasury.charge(hut.getColony(), level, Treasury.cost(stack.copyWithCount(inserted)), Treasury.Line.CONSTRUCTION);
-                budget -= inserted;
-
-                if (inserted > 0)
-                {
-                    progress = true;
-                    trickledItems += inserted;
-                    trickledTypes++;
-                }
-                if (!remainder.isEmpty())
-                {
-
-                    if (rackFullAnnounced.add(hut))
+                    final ItemStack stack = resource.getItemStack().copy();
+                    final int toInsert = Math.min(Math.min(missing, share), Math.min((int) budget, stack.getMaxStackSize()));
+                    stack.setCount(toInsert);
+                    if (!Treasury.canAfford(hut.getColony(), level, owed + Treasury.cost(stack)))
                     {
-                        ColonyAutopilot.LOGGER.debug("[{}] the crew's racks at {} are full while build materials are still missing — waiting on the janitor for space",
-                          hut.getColony().getName(), hut.getID().toShortString());
+                        if (fundsShortAnnounced.add(hut))
+                        {
+                            ColonyAutopilot.LOGGER.debug("[{}] the treasury cannot pay for the crew's materials at {} — the trickle waits for ColonyBucks",
+                              hut.getColony().getName(), hut.getID().toShortString());
+                        }
+                        unpaid = true;
+                        break;
                     }
-                    racksFull = true;
-                    break;
-                }
-                if (missing - inserted <= 0)
-                {
-                    missingOf.remove(resource);
-                }
-                else
-                {
-                    missingOf.put(resource, missing - inserted);
+                    if (partFilled != null
+                          && partFilled.getOrDefault(stack.getItem(), List.of()).stream().noneMatch(inSlot -> ItemStack.isSameItemSameComponents(inSlot, stack)))
+                    {
+                        blocked.add(resource);
+                        continue;
+                    }
+
+                    final ItemStack remainder = InventoryUtils.addItemStackToItemHandlerWithResult(racks, stack);
+                    final int inserted = toInsert - remainder.getCount();
+                    owed += Treasury.cost(stack.copyWithCount(inserted));
+                    budget -= inserted;
+
+                    if (inserted > 0)
+                    {
+                        progress = true;
+                        trickledItems += inserted;
+                        trickledTypes++;
+                    }
+                    if (!remainder.isEmpty())
+                    {
+                        if (rackFullAnnounced.add(hut))
+                        {
+                            ColonyAutopilot.LOGGER.debug("[{}] the crew's racks at {} are full while build materials are still missing — waiting on the janitor for space",
+                              hut.getColony().getName(), hut.getID().toShortString());
+                        }
+                        blocked.add(resource);
+                        if (!racksFull)
+                        {
+                            racksFull = true;
+                            final Map<Item, List<ItemStack>> read = new HashMap<>();
+                            boolean emptySlot = false;
+                            for (int slot = 0; slot < racks.getSlots() && !emptySlot; slot++)
+                            {
+                                final ItemStack inSlot = racks.getStackInSlot(slot);
+                                emptySlot = inSlot.isEmpty();
+                                if (!emptySlot && inSlot.getCount() < Math.min(racks.getSlotLimit(slot), inSlot.getMaxStackSize()))
+                                {
+                                    read.computeIfAbsent(inSlot.getItem(), k -> new ArrayList<>()).add(inSlot);
+                                }
+                            }
+
+                            partFilled = emptySlot ? null : read;
+                        }
+                    }
+                    if (missing - inserted <= 0)
+                    {
+                        missingOf.remove(resource);
+                    }
+                    else
+                    {
+                        missingOf.put(resource, missing - inserted);
+                    }
                 }
             }
+        }
+        finally
+        {
+
+            Treasury.charge(hut.getColony(), level, owed, Treasury.Line.CONSTRUCTION);
         }
         if (!racksFull)
         {
@@ -367,9 +416,10 @@ public class MaterialTrickle
 
         Treasury.noteWaitingBuild(hut.getColony(), hut.getPosition(), unpaid ? new Treasury.Goal(buildName(hut), buildPrice, buildPrice - buildFamily,
           buildGood, inKind != null ? "the warehouse or the builder's hut's racks" : "the builder's hut's racks") : null);
+
         if (trickledItems > 0)
         {
-            ColonyAutopilot.LOGGER.debug("[{}] trickled {} items ({} stacks) into the builder hut at {} — {} materials still missing",
+            ColonyAutopilot.LOGGER.trace("[{}] trickled {} items ({} stacks) into the builder hut at {} — {} materials still missing",
               hut.getColony().getName(), trickledItems, trickledTypes, hut.getID().toShortString(), missingOf.size());
         }
 

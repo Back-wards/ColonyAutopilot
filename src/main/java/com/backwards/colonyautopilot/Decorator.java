@@ -16,15 +16,19 @@ import com.minecolonies.core.blocks.BlockDecorationController;
 import com.minecolonies.core.colony.workorders.WorkOrderDecoration;
 import com.minecolonies.core.tileentities.TileEntityDecorationController;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Tuple;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.shapes.Shapes;
+import net.minecraft.world.phys.shapes.VoxelShape;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
@@ -137,6 +141,8 @@ public class Decorator
 
         final int target = AutopilotConfig.get(colony, AutopilotConfig.DECORATIONS_TARGET);
         final BlockPos center = colony.getCenter();
+
+        final List<SiteSelector.Footprint> keepOff = new ArrayList<>();
         for (int spot = 0; spot < target * 4 && standing < target; spot++)
         {
             final double theta = (spot % 8) * Math.PI / 4 + (spot / 8) * Math.PI / 8;
@@ -174,7 +180,7 @@ public class Decorator
                 continue;
             }
             final DecoPrint print = prints.get(spot % prints.size());
-            if (!spotFree(level, colony, anchor, print))
+            if (!spotFree(level, colony, anchor, print, keepOff))
             {
                 continue;
             }
@@ -195,6 +201,11 @@ public class Decorator
                 return;
             }
             final String name = prettyName(print.path());
+
+            if (!AutopilotConfig.live(colony, AutopilotConfig.EXPANSION_ENABLED))
+            {
+                return;
+            }
 
             final BlockPos lifted = AutopilotConfig.get(colony, AutopilotConfig.BLUEPRINT_GROUND_OFFSET)
                                       ? anchor.above(BlueprintGround.placementOffset(blueprint) - 1) : anchor;
@@ -282,6 +293,54 @@ public class Decorator
                  && block != ModBlocks.blockFluidSubstitution.get() && block != ModBlocks.blockTagSubstitution.get();
     }
 
+    private static boolean poursOut(final Blueprint blueprint)
+    {
+        final short[][][] structure = blueprint.getStructure();
+        final BlockState[] palette = blueprint.getPalette();
+        final int sizeX = blueprint.getSizeX(), sizeY = blueprint.getSizeY(), sizeZ = blueprint.getSizeZ();
+        final Block keep = ModBlocks.blockSubstitution.get();
+        final Block fluid = ModBlocks.blockFluidSubstitution.get();
+
+        final BlockPos anchor = blueprint.getPrimaryBlockOffset();
+        final boolean readable = anchor.getX() >= 0 && anchor.getX() < sizeX && anchor.getY() >= 0 && anchor.getY() < sizeY
+                                   && anchor.getZ() >= 0 && anchor.getZ() < sizeZ;
+        final int fromY = Math.max(0, anchor.getY() - (readable ? Math.max(0, BlueprintGround.placementOffset(blueprint) - 1) : 0));
+        for (int y = fromY; y < sizeY; y++)
+        {
+            for (int z = 0; z < sizeZ; z++)
+            {
+                for (int x = 0; x < sizeX; x++)
+                {
+                    final BlockState state = palette[structure[y][z][x] & 0xFFFF];
+                    if (state == null || state.getBlock() != fluid && !state.getFluidState().isSource())
+                    {
+                        continue;
+                    }
+
+                    final VoxelShape own = state.getBlock() == fluid ? Shapes.empty() : state.getCollisionShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO);
+                    for (final Direction side : Direction.Plane.HORIZONTAL)
+                    {
+                        final int besideX = x + side.getStepX();
+                        final int besideZ = z + side.getStepZ();
+                        if (besideX >= 0 && besideZ >= 0 && besideX < sizeX && besideZ < sizeZ)
+                        {
+                            final BlockState beside = palette[structure[y][besideZ][besideX] & 0xFFFF];
+                            if (beside != null && !beside.isAir() && beside.getBlock() != keep)
+                            {
+                                continue;
+                            }
+                        }
+                        if (!Shapes.mergedFaceOccludes(own, Shapes.empty(), side))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     private static Long covering(final Map<Long, int[]> records, final int x, final int z)
     {
         for (final Map.Entry<Long, int[]> record : records.entrySet())
@@ -330,7 +389,8 @@ public class Decorator
         }
     }
 
-    private boolean spotFree(final ServerLevel level, final IColony colony, final BlockPos anchor, final DecoPrint print)
+    private boolean spotFree(final ServerLevel level, final IColony colony, final BlockPos anchor, final DecoPrint print,
+      final List<SiteSelector.Footprint> keepOff)
     {
 
         final int reach = Math.max(1, Math.max(print.sizeX(), print.sizeZ()) - 1);
@@ -359,17 +419,14 @@ public class Decorator
             }
         }
 
-        for (final SiteSelector.Footprint shield : growth.sacredGround(colony))
+        if (keepOff.isEmpty())
+        {
+            keepOff.addAll(growth.sacredGround(colony));
+            keepOff.addAll(growth.doorstepZones(colony, level));
+        }
+        for (final SiteSelector.Footprint shield : keepOff)
         {
             if (shield.intersects(minX, minZ, maxX, maxZ))
-            {
-                return false;
-            }
-        }
-
-        for (final SiteSelector.Footprint doorstep : growth.doorstepZones(colony, level))
-        {
-            if (doorstep.intersects(minX, minZ, maxX, maxZ))
             {
                 return false;
             }
@@ -465,6 +522,12 @@ public class Decorator
 
                     if (directory.equals("decorations/supplies") || directory.startsWith("decorations/supplies/"))
                     {
+                        continue;
+                    }
+                    if (poursOut(blueprint))
+                    {
+                        ColonyAutopilot.LOGGER.debug("Decoration catalog for pack '{}': {}/{} is left out — it holds a fluid with an open side and would pour over the village standing alone",
+                          packName, directory, blueprint.getFileName());
                         continue;
                     }
                     prints.add(new DecoPrint(directory + "/" + blueprint.getFileName() + ".blueprint", blueprint.getSizeX(), blueprint.getSizeZ()));

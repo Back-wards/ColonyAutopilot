@@ -27,13 +27,7 @@ import static com.minecolonies.api.util.constant.translation.ToolTranslationCons
   "steve_gall.minecolonies_tweaks.core.common.network.message.AssignFilterableItemsMessage",
   "steve_gall.minecolonies_tweaks.core.common.network.message.AssignIdListMessage",
   "steve_gall.minecolonies_tweaks.core.common.network.message.MaximumStockUpdateMessage",
-  "steve_gall.minecolonies_tweaks.core.common.network.message.FarmFieldPlotResize2Message",
-  "steve_gall.minecolonies_compatibility.core.common.network.message.ModuleMenuOpenMessage",
-  "steve_gall.minecolonies_compatibility.core.common.network.message.NetworkStorageRefreshMessage",
-  "steve_gall.minecolonies_compatibility.core.common.network.message.RestrictGiveToolMessage",
-  "steve_gall.minecolonies_compatibility.core.common.network.message.RestrictSetAreaMessage",
-  "steve_gall.minecolonies_compatibility.core.common.network.message.RestrictSetEnabledMessage",
-  "steve_gall.minecolonies_compatibility.module.common.silentgear.network.RepairMaterialMaterialMessage"})
+  "steve_gall.minecolonies_tweaks.core.common.network.message.FarmFieldPlotResize2Message"})
 public class ModuleMessagePermissionMixin
 {
     @Inject(method = "handle(Lnet/neoforged/neoforge/network/handling/IPayloadContext;)V", at = @At("HEAD"), cancellable = true, require = 0)

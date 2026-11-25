@@ -6,6 +6,7 @@ import com.minecolonies.api.colony.ICitizenData;
 import com.minecolonies.api.colony.IColony;
 import com.minecolonies.api.colony.buildings.IBuilding;
 import com.minecolonies.api.colony.buildings.workerbuildings.IWareHouse;
+import com.minecolonies.api.colony.requestsystem.request.IRequest;
 import com.minecolonies.api.colony.requestsystem.request.RequestState;
 import com.minecolonies.api.colony.requestsystem.token.IToken;
 import com.minecolonies.api.items.component.ColonyId;
@@ -63,6 +64,10 @@ final class JobWatch
         long total = Long.MIN_VALUE;
         int lastMoveDay;
         int strikes;
+
+        long ticks = -1;
+
+        boolean raided;
     }
 
     private final Map<ColonyId, Map<BlockPos, Pulse>> pulses = new HashMap<>();
@@ -120,10 +125,23 @@ final class JobWatch
         final Map<BlockPos, Pulse> seen = pulses.get(ColonyAutopilot.colonyKey(colony));
         final Pulse last = seen == null ? null : seen.get(building.getID());
         final String still = last == null || last.total == Long.MIN_VALUE ? "first look" : (colony.getDay() - last.lastMoveDay) + " game-day(s) since its last move";
+
+        final StringBuilder crew = new StringBuilder();
+        for (final ICitizenData citizen : building.getAllAssignedCitizen())
+        {
+            crew.append("; ").append(citizen.getName()).append(" at ").append(citizen.getLastPosition().toShortString()).append(": ")
+              .append(citizen.getJob() == null ? "no job" : citizen.getJob().getNameTagDescription())
+              .append(citizen.isAsleep() ? ", asleep (that is his bed, and the state his last before it)" : "").append(citizen.getCitizenDiseaseHandler().isSick() ? ", sick" : "");
+            for (final IRequest<?> open : building.getOpenRequests(citizen.getId()))
+            {
+                crew.append(", waits for ").append(open.getShortDisplayString().getString()).append(" (").append(open.getState())
+                  .append(open.hasChildren() ? ", a delivery or order under it" : "").append(')');
+            }
+        }
         final String branch = watch(colony, building, hut, stats != null, total, unpaid);
 
-        ColonyAutopilot.LOGGER.debug("[{}] job watch: the {} at {} — statistics total {}, {}, {} request(s) waiting for funds: {}", colony.getName(),
-          SiteSelector.plainName(building), building.getPosition().toShortString(), stats == null ? "none" : total, still, unpaid, branch);
+        ColonyAutopilot.LOGGER.debug("[{}] job watch: the {} at {} — statistics total {}, {}, {} request(s) waiting for funds: {}{}", colony.getName(),
+          SiteSelector.plainName(building), building.getPosition().toShortString(), stats == null ? "none" : total, still, unpaid, branch, crew);
     }
 
     private String watch(final IColony colony, final IBuilding building, final Block hut, final boolean hasStats, final long total, final int unpaid)
@@ -138,6 +156,8 @@ final class JobWatch
             if (waiting != null)
             {
                 waiting.lastMoveDay = today;
+
+                waiting.raided = colony.getRaiderManager().isRaided();
             }
             return "no worker, the clock waits";
         }
@@ -146,6 +166,25 @@ final class JobWatch
             return "no statistics to read";
         }
         final Pulse pulse = pulses.computeIfAbsent(key, k -> new HashMap<>()).computeIfAbsent(building.getID(), k -> new Pulse());
+
+        long ticks = -1;
+        if (colony.getWorld() instanceof ServerLevel level)
+        {
+            for (final ICitizenData citizen : building.getAllAssignedCitizen())
+            {
+                final int lived = UpgradeDirector.ticksLived(level, citizen);
+                if (lived >= 0)
+                {
+                    ticks = Math.max(ticks, 0) + lived;
+                }
+            }
+        }
+        final boolean stoodStill = ticks >= 0 && ticks == pulse.ticks;
+        pulse.ticks = ticks;
+
+        final boolean raided = colony.getRaiderManager().isRaided();
+        final boolean raidSinceLastLook = raided || pulse.raided;
+        pulse.raided = raided;
         if (hut == ModBlocks.blockHutDeliveryman && !hasQueuedWork(building))
         {
 
@@ -165,6 +204,18 @@ final class JobWatch
         {
             return "parked after " + (MAX_STRIKES - 1) + " remedies";
         }
+
+        if (stoodStill)
+        {
+            pulse.lastMoveDay = today;
+            return "held: its crew has not ticked since the last look, the level stood still";
+        }
+
+        if (raidSinceLastLook)
+        {
+            pulse.lastMoveDay = today;
+            return raided ? "held: the colony is raided, its workers sent to bed" : "held: a raid ended since the last look, its workers were in bed";
+        }
         if (today - pulse.lastMoveDay < STALL_DAYS)
         {
             return "still, a strike at " + STALL_DAYS + " game-days";
@@ -175,17 +226,25 @@ final class JobWatch
             if (citizen.getSaturation() < CitizenConstants.LOW_SATURATION)
             {
                 pulse.lastMoveDay = today;
-                ColonyAutopilot.LOGGER.info("[{}] the {} has produced nothing for {} game-days — but its worker {} is starving, not shirking (last seen at {}; strike held; the village owes him a meal)",
-                  colony.getName(), building.getBuildingDisplayName(), STALL_DAYS, citizen.getName(), citizen.getLastPosition().toShortString());
+                ColonyAutopilot.LOGGER.info("[{}] the {} at {} has produced nothing for {} game-days — but its worker {} is starving, not shirking (last seen at {}; strike held; the village owes him a meal)",
+                  colony.getName(), SiteSelector.plainName(building), building.getPosition().toShortString(), STALL_DAYS, citizen.getName(), citizen.getLastPosition().toShortString());
                 return "held: its worker is starving";
+            }
+
+            if (citizen.getCitizenDiseaseHandler().isSick())
+            {
+                pulse.lastMoveDay = today;
+                ColonyAutopilot.LOGGER.debug("[{}] the {} at {} produces nothing while its worker {} is sick — the watch waits",
+                  colony.getName(), SiteSelector.plainName(building), building.getPosition().toShortString(), citizen.getName());
+                return "held: its worker is sick";
             }
         }
 
         if (unpaid > 0)
         {
             pulse.lastMoveDay = today;
-            ColonyAutopilot.LOGGER.debug("[{}] the {} produces nothing while {} of its requests wait for funds — the watch waits",
-              colony.getName(), building.getBuildingDisplayName(), unpaid);
+            ColonyAutopilot.LOGGER.debug("[{}] the {} at {} produces nothing while {} of its requests wait for funds — the watch waits",
+              colony.getName(), SiteSelector.plainName(building), building.getPosition().toShortString(), unpaid);
             return "held: waiting for funds";
         }
 
@@ -194,8 +253,8 @@ final class JobWatch
         {
             pulse.lastMoveDay = today;
             pulse.strikes = 0;
-            ColonyAutopilot.LOGGER.info("[{}] the {}'s counters sit still but a field of it is sown or growing — crops are the harvest on its way, the watch waits",
-              colony.getName(), building.getBuildingDisplayName());
+            ColonyAutopilot.LOGGER.info("[{}] the {} at {}: its counters sit still but a field of it is sown or growing — crops are the harvest on its way, the watch waits",
+              colony.getName(), SiteSelector.plainName(building), building.getPosition().toShortString());
             return "held: a field is sown or growing";
         }
 
@@ -203,8 +262,8 @@ final class JobWatch
         {
             pulse.lastMoveDay = today;
             pulse.strikes = 0;
-            ColonyAutopilot.LOGGER.info("[{}] the {}'s counters sit still but its shaft's work order is open — the mine is being dug, the watch waits",
-              colony.getName(), building.getBuildingDisplayName());
+            ColonyAutopilot.LOGGER.info("[{}] the {} at {}: its counters sit still but its shaft's work order is open — the mine is being dug, the watch waits",
+              colony.getName(), SiteSelector.plainName(building), building.getPosition().toShortString());
             return "held: its shaft's work order is open";
         }
 
@@ -213,8 +272,8 @@ final class JobWatch
         {
             pulse.lastMoveDay = today;
             pulse.strikes = 0;
-            ColonyAutopilot.LOGGER.info("[{}] the {} waits on its grove — saplings stand where trees will; the watch waits with him",
-              colony.getName(), building.getBuildingDisplayName());
+            ColonyAutopilot.LOGGER.info("[{}] the {} at {} waits on its grove — saplings stand where trees will; the watch waits with him",
+              colony.getName(), SiteSelector.plainName(building), building.getPosition().toShortString());
             return "held: its grove is growing";
         }
 
@@ -223,8 +282,8 @@ final class JobWatch
         {
             pulse.lastMoveDay = today;
             pulse.strikes = 0;
-            ColonyAutopilot.LOGGER.info("[{}] the {}'s counters sit still but its hives are filling — honey is the harvest on its way, the watch waits",
-              colony.getName(), building.getBuildingDisplayName());
+            ColonyAutopilot.LOGGER.info("[{}] the {} at {}: its counters sit still but its hives are filling — honey is the harvest on its way, the watch waits",
+              colony.getName(), SiteSelector.plainName(building), building.getPosition().toShortString());
             return "held: its hives are filling";
         }
 
@@ -233,8 +292,8 @@ final class JobWatch
         {
             pulse.lastMoveDay = today;
             pulse.strikes = 0;
-            ColonyAutopilot.LOGGER.info("[{}] the {}'s counters sit still but its barrels are composting — the batch is on its way, the watch waits",
-              colony.getName(), building.getBuildingDisplayName());
+            ColonyAutopilot.LOGGER.info("[{}] the {} at {}: its counters sit still but its barrels are composting — the batch is on its way, the watch waits",
+              colony.getName(), SiteSelector.plainName(building), building.getPosition().toShortString());
             return "held: its barrels are composting";
         }
 
@@ -243,8 +302,8 @@ final class JobWatch
         {
             pulse.lastMoveDay = today;
             pulse.strikes = 0;
-            ColonyAutopilot.LOGGER.info("[{}] the {}'s counters sit still but it has no water to fish — it waits for its pond, and the watch waits with it",
-              colony.getName(), building.getBuildingDisplayName());
+            ColonyAutopilot.LOGGER.info("[{}] the {} at {}: its counters sit still but it has no water to fish — it waits for its pond, and the watch waits with it",
+              colony.getName(), SiteSelector.plainName(building), building.getPosition().toShortString());
             return "held: no water to fish";
         }
 
@@ -265,32 +324,47 @@ final class JobWatch
                 if (current != null)
                 {
                     levels.repairLevel(levels.getLevelId(current));
-                    ColonyAutopilot.LOGGER.warn("[{}] the {} has produced nothing for {} game-days — repairing the mine's current level",
-                      colony.getName(), SiteSelector.plainName(building), STALL_DAYS);
+                    ColonyAutopilot.LOGGER.warn("[{}] the {} at {} has produced nothing for {} game-days — repairing the mine's current level",
+                      colony.getName(), SiteSelector.plainName(building), building.getPosition().toShortString(), STALL_DAYS);
                     return "strike 1: the mine's level repaired";
                 }
             }
-            ColonyAutopilot.LOGGER.warn("[{}] the {} has produced nothing for {} game-days — under watch (a fresh hire follows if the freeze holds)",
-              colony.getName(), SiteSelector.plainName(building), STALL_DAYS);
+            ColonyAutopilot.LOGGER.warn("[{}] the {} at {} has produced nothing for {} game-days — under watch (a fresh hire follows if the freeze holds, or where hiring is the player's a reset of the same worker)",
+              colony.getName(), SiteSelector.plainName(building), building.getPosition().toShortString(), STALL_DAYS);
             return "strike 1: under watch";
         }
         if (pulse.strikes < MAX_STRIKES)
         {
 
-            final WorkerBuildingModule crew = building.getModule(WorkerBuildingModule.class);
-            if (crew != null)
+            int dismissed = 0;
+            int reset = 0;
+            for (final WorkerBuildingModule crew : building.getModules(WorkerBuildingModule.class))
             {
-                for (final var citizenData : List.copyOf(building.getAllAssignedCitizen()))
+                final boolean rehires = com.minecolonies.core.util.BuildingUtils.canAutoHire(building, crew.getHiringMode(), crew.getJobEntry());
+                for (final ICitizenData worker : crew.getAssignedCitizen())
                 {
-                    crew.removeCitizen(citizenData);
+                    crew.removeCitizen(worker);
+                    if (!rehires && crew.assignCitizen(worker))
+                    {
+                        reset++;
+                    }
+                    else
+                    {
+                        dismissed++;
+                    }
                 }
-                ColonyAutopilot.LOGGER.warn("[{}] the {} has produced nothing for {} game-days — its worker was dismissed for a fresh hire (strike {})",
-                  colony.getName(), SiteSelector.plainName(building), STALL_DAYS, pulse.strikes);
             }
-            return "strike " + pulse.strikes + (crew == null ? ": no crew to dismiss" : ": its worker dismissed");
+            if (dismissed + reset == 0)
+            {
+                return "strike " + pulse.strikes + ": no crew to dismiss";
+            }
+            ColonyAutopilot.LOGGER.warn("[{}] the {} at {} has produced nothing for {} game-days — its worker was {} (strike {})",
+              colony.getName(), SiteSelector.plainName(building), building.getPosition().toShortString(), STALL_DAYS,
+              dismissed > 0 ? "dismissed for a fresh hire" : "reset in place, the same worker with a fresh start: hiring here is the player's", pulse.strikes);
+            return "strike " + pulse.strikes + (dismissed > 0 ? ": its worker dismissed" : ": its worker reset in place");
         }
-        ColonyAutopilot.LOGGER.warn("[{}] the {} STILL produces nothing after {} remedies — something is mechanically wrong there (watch parked; needs eyes)",
-          colony.getName(), SiteSelector.plainName(building), MAX_STRIKES - 1);
+        ColonyAutopilot.LOGGER.warn("[{}] the {} at {} STILL produces nothing after {} remedies — something is mechanically wrong there (watch parked; needs eyes)",
+          colony.getName(), SiteSelector.plainName(building), building.getPosition().toShortString(), MAX_STRIKES - 1);
         if (building instanceof BuildingBeekeeper beekeeper && colony.getWorld() instanceof ServerLevel level)
         {
             final StringBuilder census = new StringBuilder();
@@ -431,7 +505,7 @@ final class JobWatch
         if (jobless != null && crew.assignCitizen(jobless))
         {
             ColonyAutopilot.LOGGER.info("[{}] assigned {} to the {} — the village must never stand cookless",
-              colony.getName(), jobless.getName(), restaurant.getBuildingDisplayName());
+              colony.getName(), jobless.getName(), SiteSelector.plainName(restaurant));
         }
     }
 
@@ -458,7 +532,9 @@ final class JobWatch
                 continue;
             }
             final WorkerBuildingModule crew = building.getModule(WorkerBuildingModule.class);
-            if (crew == null || !com.minecolonies.core.util.BuildingUtils.canAutoHire(building, crew.getHiringMode(), crew.getJobEntry()))
+
+            if (crew == null || !WorldUtil.isChunkLoaded(colony.getWorld(), building.getPosition().getX() >> 4, building.getPosition().getZ() >> 4)
+                  || !com.minecolonies.core.util.BuildingUtils.canAutoHire(building, crew.getHiringMode(), crew.getJobEntry()))
             {
                 continue;
             }
@@ -466,7 +542,7 @@ final class JobWatch
             if (jobless != null && crew.assignCitizen(jobless))
             {
                 ColonyAutopilot.LOGGER.info("[{}] assigned {} to the {} — the warehouse was resolving requests with no courier alive to carry them",
-                  colony.getName(), jobless.getName(), building.getBuildingDisplayName());
+                  colony.getName(), jobless.getName(), SiteSelector.plainName(building));
                 return;
             }
         }

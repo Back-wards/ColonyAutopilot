@@ -25,6 +25,7 @@ import com.minecolonies.api.colony.requestsystem.token.IToken;
 import com.minecolonies.api.crafting.IRecipeStorage;
 import com.minecolonies.api.crafting.ItemStorage;
 import com.minecolonies.api.items.ModItems;
+import com.minecolonies.api.items.ModTags;
 import com.minecolonies.api.items.component.ColonyId;
 import com.minecolonies.api.util.InventoryUtils;
 import com.minecolonies.api.util.ItemStackUtils;
@@ -39,6 +40,7 @@ import com.minecolonies.core.colony.buildings.modules.RestaurantMenuModule;
 import com.minecolonies.core.colony.buildings.modules.TavernBuildingModule;
 import com.minecolonies.core.colony.buildings.workerbuildings.BuildingBuilder;
 import com.minecolonies.core.colony.buildings.workerbuildings.BuildingFarmer;
+import com.minecolonies.core.colony.buildings.workerbuildings.BuildingStable;
 import com.minecolonies.core.colony.buildings.workerbuildings.BuildingUniversity;
 import com.minecolonies.core.colony.buildings.workerbuildings.PostBox;
 import com.minecolonies.core.colony.requestable.SmeltableOre;
@@ -60,7 +62,6 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.items.IItemHandler;
-import net.neoforged.neoforge.items.IItemHandlerModifiable;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -115,6 +116,8 @@ public class ProvidenceSweep
 
     private final Map<ColonyId, Set<IToken<?>>> leftOpen = new HashMap<>();
 
+    private final Map<ColonyId, Set<IToken<?>>> threw = new HashMap<>();
+
     private final Set<IToken<?>> reachedAbove = new HashSet<>();
 
     public static final String POSTBOX_LOCKED = "The Postbox is locked in Progression Mode: only the colony spends ColonyBucks.";
@@ -154,6 +157,7 @@ public class ProvidenceSweep
         unconjurable.clear();
         kindOff.clear();
         leftOpen.clear();
+        threw.clear();
         pantryClosed.clear();
         pantryLastFed.clear();
         cureWaitLogged.clear();
@@ -173,7 +177,7 @@ public class ProvidenceSweep
         {
             tickCounter = 0;
             final Set<ColonyId> live = rota.fill(event.getServer());
-            ColonyAutopilot.retainColonies(live, firstSeen, unconjurable, kindOff, leftOpen, pantryLastFed, cureWaitLogged, lastThreatBrace);
+            ColonyAutopilot.retainColonies(live, firstSeen, unconjurable, kindOff, leftOpen, threw, pantryLastFed, cureWaitLogged, lastThreatBrace);
             pantryClosed.retainAll(live);
             Treasury.retain(live);
         }
@@ -220,19 +224,41 @@ public class ProvidenceSweep
                 Treasury.setWaitingCures(colony, false, 0);
                 continue;
             }
+
             try
             {
 
                 Treasury.pruneWaitingRequests(colony);
                 sweep(colony);
+            }
+            catch (final Exception e)
+            {
+                ColonyAutopilot.LOGGER.warn("Providence sweep failed for colony {}", colony.getName(), e);
+            }
+            try
+            {
                 if (!progression && AutopilotConfig.get(colony, AutopilotConfig.PROVIDENCE_RESTAURANT_MENUS))
                 {
                     ensureRestaurantMenus(colony);
                 }
+            }
+            catch (final Exception e)
+            {
+                ColonyAutopilot.LOGGER.warn("Menu upkeep failed for colony {}", colony.getName(), e);
+            }
+            try
+            {
                 if (AutopilotConfig.get(colony, AutopilotConfig.PANTRY_ENABLED))
                 {
                     feedHungryCitizens(colony);
                 }
+            }
+            catch (final Exception e)
+            {
+                ColonyAutopilot.LOGGER.warn("Pantry failed for colony {}", colony.getName(), e);
+            }
+            try
+            {
                 if (AutopilotConfig.get(colony, AutopilotConfig.INFIRMARY_ENABLED))
                 {
                     nurseSickCitizens(colony);
@@ -241,14 +267,35 @@ public class ProvidenceSweep
                 {
                     Treasury.setWaitingCures(colony, false, 0);
                 }
+            }
+            catch (final Exception e)
+            {
+                ColonyAutopilot.LOGGER.warn("Infirmary failed for colony {}", colony.getName(), e);
+            }
+            try
+            {
                 if (AutopilotConfig.get(colony, AutopilotConfig.RECRUIT_VISITORS))
                 {
                     recruitVisitor(colony);
                 }
+            }
+            catch (final Exception e)
+            {
+                ColonyAutopilot.LOGGER.warn("Recruiting failed for colony {}", colony.getName(), e);
+            }
+            try
+            {
                 if (AutopilotConfig.get(colony, AutopilotConfig.KEEP_VISITORS_COMING))
                 {
                     keepVisitorsComing(colony);
                 }
+            }
+            catch (final Exception e)
+            {
+                ColonyAutopilot.LOGGER.warn("Visitor upkeep failed for colony {}", colony.getName(), e);
+            }
+            try
+            {
                 final boolean bracing = threatForecast(colony);
                 if (bracing)
                 {
@@ -258,7 +305,7 @@ public class ProvidenceSweep
             }
             catch (final Exception e)
             {
-                ColonyAutopilot.LOGGER.warn("Providence sweep failed for colony {}", colony.getName(), e);
+                ColonyAutopilot.LOGGER.warn("Threat bracing and warehouse stocking failed for colony {}", colony.getName(), e);
             }
         }
     }
@@ -542,56 +589,6 @@ public class ProvidenceSweep
         final Long arrived = ARRIVALS.remove(citizen);
         return arrived != null && AutopilotConfig.SPEC.isLoaded() && AutopilotConfig.live(citizen.getColony(), AutopilotConfig.QUIET_ARRIVAL_DEATHS)
                  && citizen.getColony().getWorld().getGameTime() - arrived < 24000L;
-    }
-
-    public static void reclaimIssuedKit(final ICitizenData citizen, final IBuilding post)
-    {
-
-        if (!AutopilotConfig.SPEC.isLoaded() || !AutopilotConfig.masterOn()
-              || !(citizen.getInventory() instanceof IItemHandlerModifiable inventory))
-        {
-            return;
-        }
-        final boolean paid = AutopilotConfig.progressionMode(citizen.getColony());
-        if (paid && post == null)
-        {
-            return;
-        }
-        boolean issued = false;
-        for (int slot = 0; slot < inventory.getSlots(); slot++)
-        {
-            if (inventory.getStackInSlot(slot).getOrDefault(net.minecraft.core.component.DataComponents.CUSTOM_DATA,
-              net.minecraft.world.item.component.CustomData.EMPTY).contains(AutopilotConfig.ISSUED_GUN_TAG))
-            {
-                takeIssued(citizen, inventory, slot, paid ? post : null);
-                issued = true;
-            }
-        }
-        for (int slot = 0; issued && slot < inventory.getSlots(); slot++)
-        {
-            final var item = BuiltInRegistries.ITEM.getKey(inventory.getStackInSlot(slot).getItem());
-            if (item.getNamespace().equals("tacz") && item.getPath().equals("ammo"))
-            {
-                takeIssued(citizen, inventory, slot, paid ? post : null);
-            }
-        }
-    }
-
-    private static void takeIssued(final ICitizenData citizen, final IItemHandlerModifiable inventory, final int slot, final IBuilding post)
-    {
-        final ItemStack taken = inventory.getStackInSlot(slot);
-        inventory.setStackInSlot(slot, ItemStack.EMPTY);
-        if (post == null)
-        {
-            return;
-        }
-        final IItemHandler racks = post.getItemHandlerCap();
-        final ItemStack left = racks == null ? taken : InventoryUtils.addItemStackToItemHandlerWithResult(racks, taken);
-        if (!left.isEmpty() && citizen.getColony().getWorld() instanceof ServerLevel level)
-        {
-            final net.minecraft.core.BlockPos at = citizen.getEntity().map(Entity::blockPosition).orElse(post.getPosition());
-            net.minecraft.world.Containers.dropItemStack(level, at.getX() + 0.5, at.getY() + 0.5, at.getZ() + 0.5, left);
-        }
     }
 
     private void feedHungryCitizens(final IColony colony)
@@ -1002,6 +999,11 @@ public class ProvidenceSweep
         {
             logged.retainAll(strandedSet);
         }
+        final Set<IToken<?>> failed = threw.get(ColonyAutopilot.colonyKey(colony));
+        if (failed != null)
+        {
+            failed.retainAll(strandedSet);
+        }
         if (strandedSet.isEmpty())
         {
             return;
@@ -1019,25 +1021,39 @@ public class ProvidenceSweep
                 break;
             }
             final Long seen = seenForColony.putIfAbsent(token, now);
-            if (seen == null || now - seen < RESCUE_AGE_TICKS)
-            {
-                continue;
-            }
             final IRequest<?> request = manager.getRequestForToken(token);
             if (request == null || !(request.getRequest() instanceof IDeliverable deliverable))
             {
                 continue;
             }
-            final AbstractBuilding home;
-            if (request.getRequester() instanceof IBuildingBasedRequester requester
-                  && requester.getBuilding(manager, token).orElse(null) instanceof AbstractBuilding building)
+
+            if (request.getState() == RequestState.OVERRULED)
             {
-                home = building;
+                try
+                {
+                    manager.overruleRequest(token, ItemStack.EMPTY);
+                    rescues++;
+                    ColonyAutopilot.LOGGER.debug("[{}] request {} sat overruled, its asker never told — closed again, work resumes", colony.getName(), token);
+                }
+                catch (final RuntimeException e)
+                {
+                    if (threw.computeIfAbsent(ColonyAutopilot.colonyKey(colony), k -> new HashSet<>()).add(token))
+                    {
+                        ColonyAutopilot.LOGGER.warn("[{}] closing request {} again threw — its asker may still wait, tried again each sweep", colony.getName(), token, e);
+                    }
+                    else
+                    {
+                        ColonyAutopilot.LOGGER.debug("[{}] closing request {} again still throws: {}", colony.getName(), token, e.toString());
+                    }
+                }
+                continue;
             }
-            else
+
+            if (CLOSED.contains(request.getState()) || seen == null || now - seen < RESCUE_AGE_TICKS)
             {
-                home = buildingAt(colony, request.getRequester().getLocation());
+                continue;
             }
+            final AbstractBuilding home = homeOf(colony, manager, token, request);
             if (home == null)
             {
                 continue;
@@ -1066,10 +1082,16 @@ public class ProvidenceSweep
             {
                 continue;
             }
+            catch (final RuntimeException e)
+            {
+
+                ColonyAutopilot.LOGGER.warn("[{}] closing request {} against the goods in reach threw — closed again next sweep", colony.getName(), token, e);
+                continue;
+            }
             seenForColony.remove(token);
             rescues++;
             ColonyAutopilot.LOGGER.debug("[{}] a request for {} sat already answered in the {}'s own stores — paperwork closed, work resumes",
-              colony.getName(), inReach.getHoverName().getString(), home.getBuildingDisplayName());
+              colony.getName(), inReach.getHoverName().getString(), SiteSelector.plainName(home));
         }
 
         final Map<IToken<?>, IRequest<?>> resolved = new HashMap<>();
@@ -1092,17 +1114,8 @@ public class ProvidenceSweep
             {
                 continue;
             }
-            final AbstractBuilding home;
-            if (request.getRequester() instanceof IBuildingBasedRequester requester
-                  && requester.getBuilding(manager, token).orElse(null) instanceof AbstractBuilding building)
-            {
-                home = building;
-            }
-            else
-            {
-                home = buildingAt(colony, request.getRequester().getLocation());
-            }
-            if (home instanceof AbstractBuildingGuards)
+            final AbstractBuilding guardHome = homeOf(colony, manager, token, request);
+            if (guardHome instanceof AbstractBuildingGuards)
             {
 
                 if (warehouseStock == null)
@@ -1110,12 +1123,23 @@ public class ProvidenceSweep
                     warehouseStock = warehouseStacks(colony);
                 }
 
+                long stoodOpen = -1;
                 if ((craftingOn(manager, token) && !(deliverable instanceof Tool))
                       || (couriers && (inFlight(request) || holds(warehouseStock, deliverable))))
                 {
-                    continue;
+
+                    final Long seen = seenForColony.putIfAbsent(token, now);
+                    if (!(guardHome instanceof BuildingStable) || !(deliverable instanceof StackList) || seen == null || now - seen < delayTicks * 2)
+                    {
+                        continue;
+                    }
+                    stoodOpen = now - seen;
                 }
-                provide(colony, manager, token, seenForColony, now, smithTier);
+                if (provideOrSkip(colony, manager, token, seenForColony, now, smithTier) && stoodOpen >= 0)
+                {
+                    ColonyAutopilot.LOGGER.debug("[{}] that list of the Stablemaster at {} had stood open {} ticks behind the colony's own delivery, and no mount of the Stable is fed or readied while it is open — served by the providence instead",
+                      colony.getName(), guardHome.getPosition().toShortString(), stoodOpen);
+                }
             }
         }
 
@@ -1152,7 +1176,7 @@ public class ProvidenceSweep
             {
                 continue;
             }
-            provide(colony, manager, token, seenForColony, now, smithTier);
+            provideOrSkip(colony, manager, token, seenForColony, now, smithTier);
         }
 
         int provided = 0;
@@ -1163,7 +1187,7 @@ public class ProvidenceSweep
             {
                 continue;
             }
-            if (provide(colony, manager, token, seenForColony, now, smithTier) && ++provided >= AutopilotConfig.get(colony, AutopilotConfig.PROVIDENCE_ITEMS_PER_SWEEP))
+            if (provideOrSkip(colony, manager, token, seenForColony, now, smithTier) && ++provided >= AutopilotConfig.get(colony, AutopilotConfig.PROVIDENCE_ITEMS_PER_SWEEP))
             {
                 return;
             }
@@ -1189,7 +1213,7 @@ public class ProvidenceSweep
             if (resolver instanceof AbstractCraftingRequestResolver)
             {
 
-                if ((request == null || !(request.getRequest() instanceof Tool)) && !reachedAbove.contains(token))
+                if ((request == null || !servedWhoeverHolds(colony, manager, token, request)) && !reachedAbove.contains(token))
                 {
                     Treasury.forgetWaitingRequest(colony, token);
                 }
@@ -1209,34 +1233,19 @@ public class ProvidenceSweep
                 continue;
             }
 
-            final AbstractBuilding requester;
-            if (request.getRequester() instanceof IBuildingBasedRequester based
-                  && based.getBuilding(manager, token).orElse(null) instanceof AbstractBuilding rb)
-            {
-                requester = rb;
-            }
-            else
-            {
-                requester = buildingAt(colony, request.getRequester().getLocation());
-            }
-            if (requester instanceof BuildingBuilder && buildingHolds(requester, deliverable))
+            if (homeOf(colony, manager, token, request) instanceof BuildingBuilder hut && buildingHolds(hut, deliverable))
             {
                 continue;
             }
-            if (provide(colony, manager, token, seenForColony, now, smithTier) && ++provided >= AutopilotConfig.get(colony, AutopilotConfig.PROVIDENCE_ITEMS_PER_SWEEP))
+            if (provideOrSkip(colony, manager, token, seenForColony, now, smithTier) && ++provided >= AutopilotConfig.get(colony, AutopilotConfig.PROVIDENCE_ITEMS_PER_SWEEP))
             {
                 return;
             }
         }
     }
 
-    private static Treasury.Line ledgerLine(final Category category, final ItemStack stack)
+    private static Treasury.Line ledgerLine(final Category category)
     {
-        final net.minecraft.resources.ResourceLocation id = BuiltInRegistries.ITEM.getKey(stack.getItem());
-        if (id.getNamespace().equals("tacz") && id.getPath().equals("ammo"))
-        {
-            return Treasury.Line.ROUNDS;
-        }
         return switch (category)
         {
             case GUARD_GEAR, ARMOUR_WEAPONS -> Treasury.Line.GEAR;
@@ -1294,6 +1303,32 @@ public class ProvidenceSweep
             return Category.BUILD_MATERIALS;
         }
         return Category.OTHER;
+    }
+
+    private boolean provideOrSkip(
+      final IColony colony,
+      final IRequestManager manager,
+      final IToken<?> token,
+      final Map<IToken<?>, Long> seenForColony,
+      final long now,
+      final int smithTier)
+    {
+        try
+        {
+            return provide(colony, manager, token, seenForColony, now, smithTier);
+        }
+        catch (final RuntimeException e)
+        {
+            if (threw.computeIfAbsent(ColonyAutopilot.colonyKey(colony), k -> new HashSet<>()).add(token))
+            {
+                ColonyAutopilot.LOGGER.warn("[{}] providence failed on request {} — skipped, the rest of the sweep goes on", colony.getName(), token, e);
+            }
+            else
+            {
+                ColonyAutopilot.LOGGER.debug("[{}] providence failed on request {} again: {}", colony.getName(), token, e.toString());
+            }
+            return false;
+        }
     }
 
     private boolean provide(
@@ -1391,10 +1426,19 @@ public class ProvidenceSweep
             }
             switchedOff.remove(token);
         }
-        final ItemStack stack = conjureStackFor(request, deliverable, smithTier, pickable);
+
+        final ItemStack stack = refusal != null && refusal.smithTier() == smithTier && !(deliverable instanceof StackList)
+                                  ? refusal.pick().copy() : conjureStackFor(request, deliverable, smithTier, pickable);
         if (stack.isEmpty())
         {
             ColonyAutopilot.LOGGER.debug("[{}] providence found nothing conjurable for request {}", colony.getName(), token);
+
+            if (deliverable instanceof MinimumStack line && colony.getWorld() instanceof ServerLevel level
+                  && ColonyGrounds.get(level).stockLine(colony.getID(), home.getPosition(), line.getStack().getItem()) > 0)
+            {
+                ColonyAutopilot.LOGGER.info("[{}] the providence does not conjure {} — the {}'s standing order for it waits for a crafter of the colony to make it",
+                  colony.getName(), line.getStack().getHoverName().getString(), SiteSelector.plainName(home));
+            }
             hopeless.add(token);
 
             Treasury.forgetWaitingRequest(colony, token);
@@ -1446,7 +1490,7 @@ public class ProvidenceSweep
         final boolean metered = (category != Category.FOOD && !ItemStackUtils.ISFOOD.test(stack)) || Exchange.familyValue(stack.getItem()) > 0;
         if (metered && !Treasury.canAfford(colony, level, Treasury.cost(stack)))
         {
-            Treasury.noteWaitingRequest(colony, token, category, stack);
+            Treasury.noteWaitingRequest(colony, token, category, stack, smithTier);
 
             final long spendable = Math.max(0L, Treasury.spendable(colony));
             final long reserved = Treasury.reservedCredits(colony);
@@ -1484,27 +1528,42 @@ public class ProvidenceSweep
                 remainder = InventoryUtils.addItemStackToItemHandlerWithResult(citizen.get().getInventory(), remainder);
             }
         }
+        final boolean inPockets = remainder.isEmpty();
         if (!remainder.isEmpty() && home.getTileEntity() != null)
         {
             remainder = InventoryUtils.addItemStackToItemHandlerWithResult(home.getItemHandlerCap(), remainder);
         }
         if (remainder.getCount() >= stack.getCount())
         {
+
+            if (leftOpen.computeIfAbsent(ColonyAutopilot.colonyKey(colony), k -> new HashSet<>()).add(token))
+            {
+                ColonyAutopilot.LOGGER.debug("[{}] the providence has nowhere to put {} for {} at {} (request {}) — pockets and racks full or unloaded, tried again each sweep",
+                  colony.getName(), stack.getHoverName().getString(), asker, where, token);
+            }
             return false;
         }
 
         final int placed = stack.getCount() - remainder.getCount();
         if (metered)
         {
-            Treasury.charge(colony, level, Treasury.cost(stack.copyWithCount(placed)), ledgerLine(category, stack));
+            Treasury.charge(colony, level, Treasury.cost(stack.copyWithCount(placed)), ledgerLine(category));
         }
+
+        final boolean inHand = deliverable instanceof Tool && inPockets && request.getDeliveries().isEmpty();
         try
         {
-            manager.overruleRequest(token, stack.copyWithCount(placed));
+            manager.overruleRequest(token, inHand ? ItemStack.EMPTY : stack.copyWithCount(placed));
         }
         catch (final IllegalArgumentException e)
         {
 
+        }
+        catch (final RuntimeException e)
+        {
+
+            ColonyAutopilot.LOGGER.warn("[{}] closing request {} threw after its delivery — the goods are handed over, and if its asker was not told the next sweep closes it again",
+              colony.getName(), token, e);
         }
         seenForColony.remove(token);
 
@@ -1691,6 +1750,31 @@ public class ProvidenceSweep
         return colony != null && AutopilotConfig.SPEC.isLoaded() && AutopilotConfig.masterOn() && AutopilotConfig.progressionMode(colony);
     }
 
+    public static boolean handReadyingArmour(final ICitizenData stablemaster)
+    {
+        final IColony colony = stablemaster.getColony();
+        final ItemStack armour = new ItemStack(Items.LEATHER_HORSE_ARMOR);
+
+        if (!(colony.getWorld() instanceof ServerLevel level) || !armour.is(ModTags.leather) || !AutopilotConfig.SPEC.isLoaded()
+              || !AutopilotConfig.live(colony, AutopilotConfig.PROVIDENCE_ENABLED) || !Category.GUARD_GEAR.allowed(colony))
+        {
+            return false;
+        }
+        final long price = Treasury.cost(armour);
+        if ((AutopilotConfig.progressionMode(colony) && Treasury.neverConjured(armour)) || !Treasury.canAfford(colony, level, price))
+        {
+            return false;
+        }
+        if (!InventoryUtils.addItemStackToItemHandlerWithResult(stablemaster.getInventory(), armour.copy()).isEmpty())
+        {
+            return false;
+        }
+        Treasury.charge(colony, level, price, ledgerLine(Category.GUARD_GEAR));
+        ColonyAutopilot.LOGGER.debug("[{}] providence delivered 1x {} to Stablemaster {} — his readying list, asked of nobody",
+          colony.getName(), armour.getHoverName().getString(), stablemaster.getName());
+        return true;
+    }
+
     private static void lockPostboxes(final IColony colony)
     {
         final IRequestManager manager = colony.getRequestManager();
@@ -1762,6 +1846,13 @@ public class ProvidenceSweep
 
     static void addStockLine(final IBuilding building, final MinimumStockModule stock, final ItemStack stack, final int stacks)
     {
+
+        if (building.getColony() != null && building.getColony().getWorld() instanceof ServerLevel level
+              && ColonyGrounds.get(level).stockLine(building.getColony().getID(), building.getPosition(), stack.getItem()) == stacks
+              && autopilotsLine(ColonyGrounds.get(level), building.getColony().getID(), building, stock, stack))
+        {
+            return;
+        }
         stock.addMinimumStock(stack, stacks);
         recordStockLine(building, stock, stack, stacks);
     }
@@ -1771,15 +1862,6 @@ public class ProvidenceSweep
         if (stock.isStocked(stack) && building.getColony() != null && building.getColony().getWorld() instanceof ServerLevel level)
         {
             ColonyGrounds.get(level).setStockLine(building.getColony().getID(), building.getPosition(), stack.getItem(), stacks);
-        }
-    }
-
-    static void removeStockLine(final IBuilding building, final MinimumStockModule stock, final ItemStack stack)
-    {
-        stock.removeMinimumStock(stack);
-        if (building.getColony() != null && building.getColony().getWorld() instanceof ServerLevel level)
-        {
-            ColonyGrounds.get(level).setStockLine(building.getColony().getID(), building.getPosition(), stack.getItem(), 0);
         }
     }
 
@@ -1825,6 +1907,19 @@ public class ProvidenceSweep
         final ItemStack copy = first.copy();
         copy.setCount(Math.min(deliverable.getCount(), first.getCount()));
         return copy;
+    }
+
+    private static AbstractBuilding homeOf(final IColony colony, final IRequestManager manager, final IToken<?> token, final IRequest<?> request)
+    {
+        return request.getRequester() instanceof IBuildingBasedRequester requester
+                 && requester.getBuilding(manager, token).orElse(null) instanceof AbstractBuilding building
+                 ? building : buildingAt(colony, request.getRequester().getLocation());
+    }
+
+    static boolean servedWhoeverHolds(final IColony colony, final IRequestManager manager, final IToken<?> token, final IRequest<?> request)
+    {
+        return request.getRequest() instanceof Tool
+                 || (request.getRequest() instanceof StackList && homeOf(colony, manager, token, request) instanceof BuildingStable);
     }
 
     private static AbstractBuilding buildingAt(final IColony colony, final ILocation location)
@@ -2005,6 +2100,12 @@ public class ProvidenceSweep
             }
         }
 
+        if (deliverable instanceof StackList && match.is(ModTags.leather)
+              && deliverable.matches(new ItemStack(Items.LEATHER_HORSE_ARMOR)) && (pickable == null || pickable.test(Items.LEATHER_HORSE_ARMOR)))
+        {
+            match = new ItemStack(Items.LEATHER_HORSE_ARMOR);
+        }
+
         if (BuiltInRegistries.ITEM.getKey(match.getItem()).getNamespace().equals("domum_ornamentum"))
         {
             ItemStack textured = ItemStack.EMPTY;
@@ -2052,18 +2153,17 @@ public class ProvidenceSweep
 
             if (gear.isEmpty())
             {
-                return ItemStack.EMPTY;
+                if (!match.is(ModItems.spear))
+                {
+                    return ItemStack.EMPTY;
+                }
+                gear = match;
             }
             match = gear;
         }
         else if (deliverable instanceof Tool && !BuiltInRegistries.ITEM.getKey(match.getItem()).getNamespace().equals("minecraft"))
         {
 
-            if (BuiltInRegistries.ITEM.getKey(match.getItem()).getNamespace().equals("tacz") && net.neoforged.fml.ModList.get().isLoaded("tacz"))
-            {
-                final ItemStack rifle = GunEnchants.standardIssue();
-                return deliverable.matches(rifle) ? rifle : ItemStack.EMPTY;
-            }
             return ItemStack.EMPTY;
         }
 

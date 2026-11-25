@@ -29,7 +29,15 @@ public class ZoneMarkerItem extends Item
     static void clearPending()
     {
         PENDING.clear();
+        LAST_CLICK.clear();
     }
+
+    private record LastClick(BlockPos block, boolean sneaking, long atMillis)
+    {
+    }
+
+    private static final Map<UUID, LastClick> LAST_CLICK = new ConcurrentHashMap<>();
+    private static final long ECHO_MILLIS = 1_000L;
 
     private static final Map<UUID, Pending> PENDING = new ConcurrentHashMap<>();
     private static final long PENDING_EXPIRY_MILLIS = 120_000L;
@@ -69,6 +77,11 @@ public class ZoneMarkerItem extends Item
             player.connection.suspendFlushing();
             try
             {
+
+                if (!server.isDedicatedServer())
+                {
+                    ProtectedZones.get(level).noteSwitchedOff(level);
+                }
                 final IColony colony = IColonyManager.getInstance().getColonyByPosFromWorld(level, player.blockPosition());
                 if (colony != null && AutopilotConfig.get(colony, AutopilotConfig.ZONES_ENABLED))
                 {
@@ -78,7 +91,7 @@ public class ZoneMarkerItem extends Item
                     {
                         if (nearHolder(player, zone))
                         {
-                            outline(level, player, zone, eye, ZONE_DUST, 1, -4, 8);
+                            outline(level, player, zone, eye, ZONE_DUST, 1, -4, 8, true);
                         }
                     }
 
@@ -87,11 +100,12 @@ public class ZoneMarkerItem extends Item
                     {
                         colonyGround.addAll(growth.reservedPads(colony));
                     }
+
                     for (final SiteSelector.Footprint ground : colonyGround)
                     {
                         if (nearHolder(player, ground))
                         {
-                            outline(level, player, ground, eye, COLONY_DUST, 2, -1, 4);
+                            outline(level, player, ground, eye, COLONY_DUST, 2, -1, 1, false);
                         }
                     }
                 }
@@ -124,14 +138,14 @@ public class ZoneMarkerItem extends Item
     }
 
     private static void outline(final ServerLevel level, final ServerPlayer player, final SiteSelector.Footprint box, final int eye,
-      final DustParticleOptions dust, final int step, final int pillarLo, final int pillarHi)
+      final DustParticleOptions dust, final int step, final int pillarLo, final int pillarHi, final boolean farPillars)
     {
-        for (int x = box.minX(); x <= box.maxX() + 1; x += step)
+        for (int x = box.minX() + step; x <= box.maxX(); x += step)
         {
             edgeDust(level, player, x, eye, box.minZ(), dust);
             edgeDust(level, player, x, eye, box.maxZ() + 1, dust);
         }
-        for (int z = box.minZ(); z <= box.maxZ() + 1; z += step)
+        for (int z = box.minZ() + step; z <= box.maxZ(); z += step)
         {
             edgeDust(level, player, box.minX(), eye, z, dust);
             edgeDust(level, player, box.maxX() + 1, eye, z, dust);
@@ -142,7 +156,14 @@ public class ZoneMarkerItem extends Item
         {
             for (int y = pillarLo; y <= pillarHi; y++)
             {
-                level.sendParticles(player, dust, true, corner[0], eye + y + 0.5, corner[1], 1, 0, 0, 0, 0);
+                if (farPillars)
+                {
+                    level.sendParticles(player, dust, true, corner[0], eye + y + 0.5, corner[1], 1, 0, 0, 0, 0);
+                }
+                else
+                {
+                    edgeDust(level, player, corner[0], eye + y, corner[1], dust);
+                }
             }
         }
     }
@@ -170,6 +191,14 @@ public class ZoneMarkerItem extends Item
             return InteractionResult.PASS;
         }
         final BlockPos pos = context.getClickedPos();
+
+        final long now = System.currentTimeMillis();
+        final boolean sneaking = player.isShiftKeyDown();
+        final LastClick last = LAST_CLICK.put(player.getUUID(), new LastClick(pos.immutable(), sneaking, now));
+        if (last != null && last.block().equals(pos) && last.sneaking() == sneaking && now - last.atMillis() < ECHO_MILLIS)
+        {
+            return InteractionResult.SUCCESS;
+        }
         final IColony colony = IColonyManager.getInstance().getColonyByPosFromWorld(level, pos);
         if (colony == null ? !AutopilotConfig.ZONES_ENABLED.get() : !AutopilotConfig.get(colony, AutopilotConfig.ZONES_ENABLED))
         {
@@ -178,7 +207,8 @@ public class ZoneMarkerItem extends Item
         }
         if (colony == null)
         {
-            player.sendSystemMessage(Component.literal("Stand within your colony's claimed area to mark a protected zone."));
+
+            player.sendSystemMessage(Component.literal("Click a block inside your colony's claimed area to mark or remove a protected zone."));
             return InteractionResult.SUCCESS;
         }
 
@@ -189,7 +219,7 @@ public class ZoneMarkerItem extends Item
         }
         final ProtectedZones zones = ProtectedZones.get(level);
 
-        if (player.isShiftKeyDown())
+        if (sneaking)
         {
             final int removed = zones.removeAt(colony.getID(), pos.getX(), pos.getZ());
             if (removed > 0)
@@ -206,7 +236,6 @@ public class ZoneMarkerItem extends Item
             return InteractionResult.SUCCESS;
         }
 
-        final long now = System.currentTimeMillis();
         final Pending pending = PENDING.get(player.getUUID());
         final boolean elsewhere = pending != null
                                     && (!pending.dimension().equals(level.dimension()) || pending.colonyId() != colony.getID());
